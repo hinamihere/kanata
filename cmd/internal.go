@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"kana/core"
 	"kana/storage"
 
 	"github.com/spf13/cobra"
@@ -27,15 +28,13 @@ var internalStreamHeadCmd = &cobra.Command{
 
 		store, err := storage.OpenRepo(repoDir)
 		if err != nil {
-			return err
+			// Remote directory not initialized yet -> no snapshots
+			fmt.Println("")
+			return nil
 		}
 		defer store.Close()
 
-		head, err := store.GetStreamHead(stream)
-		if err != nil {
-			return err
-		}
-
+		head, _ := store.GetStreamHead(stream)
 		fmt.Println(head)
 		return nil
 	},
@@ -77,7 +76,11 @@ var internalImportBundleCmd = &cobra.Command{
 
 		store, err := storage.OpenRepo(repoDir)
 		if err != nil {
-			return err
+			// Auto-bootstrap repo if it doesn't exist yet!
+			store, err = storage.InitRepo(repoDir)
+			if err != nil {
+				return fmt.Errorf("failed to auto-init remote repository at %s: %w", repoDir, err)
+			}
 		}
 		defer store.Close()
 
@@ -91,7 +94,19 @@ var internalImportBundleCmd = &cobra.Command{
 			return fmt.Errorf("invalid sync bundle payload: %w", err)
 		}
 
-		return store.ImportSyncBundle(&bundle)
+		if err := store.ImportSyncBundle(&bundle); err != nil {
+			return err
+		}
+
+		// Materialize workspace files on remote
+		if bundle.HeadHash != "" {
+			newAST, err := store.GetSnapshotAST(bundle.HeadHash)
+			if err == nil && len(newAST) > 0 {
+				_ = core.MaterializeWorkspace(store.RepoPath, newAST)
+			}
+		}
+
+		return nil
 	},
 }
 
