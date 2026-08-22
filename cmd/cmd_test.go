@@ -130,4 +130,15 @@ func Stop() bool {
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("kana integrate failed: %v", err)
 	}
+
+	// 9. Test log
+	rootCmd.SetArgs([]string{"log"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana log failed: %v", err)
+	}
+
+	rootCmd.SetArgs([]string{"log", "--stream", "all"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana log --stream all failed: %v", err)
+	}
 }

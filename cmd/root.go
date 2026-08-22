@@ -38,4 +38,5 @@ func init() {
 	rootCmd.AddCommand(integrateCmd)
 	rootCmd.AddCommand(rewindCmd)
 	rootCmd.AddCommand(snapshotCmd)
+	rootCmd.AddCommand(logCmd)
 }
