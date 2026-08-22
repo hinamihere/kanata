@@ -11,6 +11,7 @@ import (
 
 var logLimit int
 var logStream string
+var logGraph bool
 
 var logCmd = &cobra.Command{
 	Use:   "log",
@@ -27,6 +28,10 @@ var logCmd = &cobra.Command{
 			return err
 		}
 		defer store.Close()
+
+		if logGraph {
+			return renderStreamGraph(store, logStream == "all" || logStream == "")
+		}
 
 		stream := logStream
 		if stream == "" {
@@ -80,4 +85,5 @@ var logCmd = &cobra.Command{
 func init() {
 	logCmd.Flags().IntVarP(&logLimit, "limit", "n", 20, "Number of snapshots to display")
 	logCmd.Flags().StringVarP(&logStream, "stream", "s", "", "Filter snapshots by work stream ('all' for all streams)")
+	logCmd.Flags().BoolVarP(&logGraph, "graph", "g", false, "Render visual ASCII stream DAG")
 }

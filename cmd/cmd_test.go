@@ -180,6 +180,17 @@ func Stop() bool {
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("kana remote remove failed: %v", err)
 	}
+
+	// 13. Test graph
+	rootCmd.SetArgs([]string{"graph"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana graph failed: %v", err)
+	}
+
+	rootCmd.SetArgs([]string{"log", "-g"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana log -g failed: %v", err)
+	}
 }
 
 func TestCLI_ClonePushPull_Local(t *testing.T) {
