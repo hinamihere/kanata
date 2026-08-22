@@ -46,5 +46,6 @@ func init() {
 	rootCmd.AddCommand(pullCmd)
 	rootCmd.AddCommand(cloneCmd)
 	rootCmd.AddCommand(suggestCmd)
+	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(internalCmd)
 }
