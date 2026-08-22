@@ -41,4 +41,9 @@ func init() {
 	rootCmd.AddCommand(logCmd)
 	rootCmd.AddCommand(diffCmd)
 	rootCmd.AddCommand(blameCmd)
+	rootCmd.AddCommand(remoteCmd)
+	rootCmd.AddCommand(pushCmd)
+	rootCmd.AddCommand(pullCmd)
+	rootCmd.AddCommand(cloneCmd)
+	rootCmd.AddCommand(internalCmd)
 }

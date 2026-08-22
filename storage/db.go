@@ -822,3 +822,162 @@ func (s *Storage) PopParked(id string) (*ParkedState, map[string]*core.FileAST, 
 	_, _ = s.db.Exec("DELETE FROM parked_states WHERE id = ?", ps.ID)
 	return &ps, files, nil
 }
+
+// -----------------------------------------------------------------------------
+// Remote Synchronization & Bundle Transfer
+// -----------------------------------------------------------------------------
+
+// SnapshotNodeRecord represents a serializable snapshot node.
+type SnapshotNodeRecord struct {
+	SnapshotHash string `json:"snapshot_hash"`
+	FilePath     string `json:"file_path"`
+	NodeID       string `json:"node_id"`
+	NodeName     string `json:"node_name"`
+	Signature    string `json:"signature"`
+	NodeType     string `json:"node_type"`
+	Language     string `json:"language"`
+	StartLine    int    `json:"start_line"`
+	EndLine      int    `json:"end_line"`
+	Content      string `json:"content"`
+	NodeHash     string `json:"node_hash"`
+	DocComment   string `json:"doc_comment"`
+	RawFileHash  string `json:"raw_file_hash"`
+}
+
+// SyncBundle encapsulates a graph delta payload between repositories.
+type SyncBundle struct {
+	Stream    string                `json:"stream"`
+	HeadHash  string                `json:"head_hash"`
+	Snapshots []*Snapshot           `json:"snapshots"`
+	Nodes     []*SnapshotNodeRecord `json:"nodes"`
+}
+
+// ExportSyncBundle creates a portable snapshot bundle of all snapshots since sinceHash.
+func (s *Storage) ExportSyncBundle(stream, sinceHash string) (*SyncBundle, error) {
+	headHash, err := s.GetStreamHead(stream)
+	if err != nil {
+		return nil, err
+	}
+	if headHash == "" {
+		return nil, fmt.Errorf("stream '%s' has no snapshots", stream)
+	}
+
+	bundle := &SyncBundle{
+		Stream:    stream,
+		HeadHash:  headHash,
+		Snapshots: make([]*Snapshot, 0),
+		Nodes:     make([]*SnapshotNodeRecord, 0),
+	}
+
+	// Traverse backward from head until sinceHash is reached
+	curr := headHash
+	var collectedSnapHashes []string
+	visited := make(map[string]bool)
+
+	for curr != "" && curr != sinceHash && !visited[curr] {
+		visited[curr] = true
+		snap, err := s.GetSnapshot(curr)
+		if err != nil || snap == nil {
+			break
+		}
+		bundle.Snapshots = append(bundle.Snapshots, snap)
+		collectedSnapHashes = append(collectedSnapHashes, snap.Hash)
+		curr = snap.ParentHash
+	}
+
+	// Collect nodes for all included snapshots
+	for _, snapHash := range collectedSnapHashes {
+		rows, err := s.db.Query(`
+			SELECT snapshot_hash, file_path, node_id, node_name, signature, node_type, language,
+			       start_line, end_line, content, node_hash, doc_comment, raw_file_hash
+			FROM snapshot_nodes WHERE snapshot_hash = ?
+		`, snapHash)
+		if err != nil {
+			return nil, err
+		}
+
+		for rows.Next() {
+			var nr SnapshotNodeRecord
+			err := rows.Scan(
+				&nr.SnapshotHash, &nr.FilePath, &nr.NodeID, &nr.NodeName, &nr.Signature,
+				&nr.NodeType, &nr.Language, &nr.StartLine, &nr.EndLine, &nr.Content,
+				&nr.NodeHash, &nr.DocComment, &nr.RawFileHash,
+			)
+			if err != nil {
+				rows.Close()
+				return nil, err
+			}
+			bundle.Nodes = append(bundle.Nodes, &nr)
+		}
+		rows.Close()
+	}
+
+	return bundle, nil
+}
+
+// ImportSyncBundle atomically writes snapshots and nodes from a bundle.
+func (s *Storage) ImportSyncBundle(bundle *SyncBundle) error {
+	if bundle == nil || len(bundle.Snapshots) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	snapStmt, err := tx.Prepare(`
+		INSERT INTO snapshots (hash, parent_hash, work_stream, author, intent, timestamp, tree_hash)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(hash) DO NOTHING
+	`)
+	if err != nil {
+		return err
+	}
+	defer snapStmt.Close()
+
+	for _, snap := range bundle.Snapshots {
+		_, err = snapStmt.Exec(
+			snap.Hash, snap.ParentHash, snap.WorkStream, snap.Author, snap.Intent, snap.Timestamp, snap.TreeHash,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to import snapshot %s: %w", snap.Hash, err)
+		}
+	}
+
+	nodeStmt, err := tx.Prepare(`
+		INSERT INTO snapshot_nodes (
+			snapshot_hash, file_path, node_id, node_name, signature, node_type, language,
+			start_line, end_line, content, node_hash, doc_comment, raw_file_hash
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(snapshot_hash, file_path, node_id) DO NOTHING
+	`)
+	if err != nil {
+		return err
+	}
+	defer nodeStmt.Close()
+
+	for _, n := range bundle.Nodes {
+		_, err = nodeStmt.Exec(
+			n.SnapshotHash, n.FilePath, n.NodeID, n.NodeName, n.Signature, n.NodeType,
+			n.Language, n.StartLine, n.EndLine, n.Content, n.NodeHash, n.DocComment, n.RawFileHash,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to import node %s: %w", n.NodeID, err)
+		}
+	}
+
+	if bundle.Stream != "" && bundle.HeadHash != "" {
+		_, err = tx.Exec(`
+			INSERT INTO streams (name, head_snapshot_hash, created_at)
+			VALUES (?, ?, ?)
+			ON CONFLICT(name) DO UPDATE SET head_snapshot_hash = excluded.head_snapshot_hash
+		`, bundle.Stream, bundle.HeadHash, time.Now().UTC())
+		if err != nil {
+			return fmt.Errorf("failed to update stream head: %w", err)
+		}
+	}
+
+	return tx.Commit()
+}

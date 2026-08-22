@@ -3,6 +3,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -162,5 +163,78 @@ func Stop() bool {
 	rootCmd.SetArgs([]string{"blame", "engine.go", "-f", "Start"})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("kana blame -f failed: %v", err)
+	}
+
+	// 12. Test remote management
+	rootCmd.SetArgs([]string{"remote", "add", "backup", "/tmp/backup_repo"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana remote add failed: %v", err)
+	}
+
+	rootCmd.SetArgs([]string{"remote"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana remote list failed: %v", err)
+	}
+
+	rootCmd.SetArgs([]string{"remote", "remove", "backup"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana remote remove failed: %v", err)
+	}
+}
+
+func TestCLI_ClonePushPull_Local(t *testing.T) {
+	primaryDir, err := os.MkdirTemp("", "kana-primary-*")
+	if err != nil {
+		t.Fatalf("failed to create primary temp dir: %v", err)
+	}
+	defer os.RemoveAll(primaryDir)
+
+	origWd, _ := os.Getwd()
+	defer os.Chdir(origWd)
+
+	// 1. Initialize primary repo
+	_ = os.Chdir(primaryDir)
+	rootCmd.SetArgs([]string{"init"})
+	_ = rootCmd.Execute()
+
+	_ = os.WriteFile(filepath.Join(primaryDir, "main.go"), []byte("package main\nfunc App() {}\n"), 0644)
+	rootCmd.SetArgs([]string{"snapshot", "-i", "Initial app commit"})
+	_ = rootCmd.Execute()
+
+	// 2. Clone primary into secondary repo
+	cloneDir, err := os.MkdirTemp("", "kana-cloned-*")
+	if err != nil {
+		t.Fatalf("failed to create clone temp dir: %v", err)
+	}
+	defer os.RemoveAll(cloneDir)
+
+	clonedDest := filepath.Join(cloneDir, "my_clone")
+	rootCmd.SetArgs([]string{"clone", primaryDir, clonedDest})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana clone failed: %v", err)
+	}
+
+	// Verify cloned file exists
+	if _, err := os.Stat(filepath.Join(clonedDest, "main.go")); err != nil {
+		t.Fatalf("cloned file main.go does not exist: %v", err)
+	}
+
+	// 3. Make new snapshot in primary
+	_ = os.Chdir(primaryDir)
+	_ = os.WriteFile(filepath.Join(primaryDir, "main.go"), []byte("package main\nfunc App() {}\nfunc Extra() {}\n"), 0644)
+	rootCmd.SetArgs([]string{"snapshot", "-i", "Add Extra function"})
+	_ = rootCmd.Execute()
+
+	// 4. Pull in cloned repo from primary
+	_ = os.Chdir(clonedDest)
+	rootCmd.SetArgs([]string{"pull", "origin", "main"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana pull failed: %v", err)
+	}
+
+	// Verify Extra() exists in cloned repo
+	content, _ := os.ReadFile(filepath.Join(clonedDest, "main.go"))
+	if !strings.Contains(string(content), "Extra") {
+		t.Errorf("expected pulled changes with 'Extra', got: %s", string(content))
 	}
 }
