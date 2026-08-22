@@ -1,6 +1,7 @@
 package core
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -73,6 +74,37 @@ func BrandNewFunc() {
 
 	if added != 1 || removed != 1 || modified != 1 {
 		t.Errorf("expected 1 added, 1 removed, 1 modified, got %d added, %d removed, %d modified", added, removed, modified)
+	}
+}
+
+func TestFormatWorkspacePatch(t *testing.T) {
+	oldSrc := []byte(`package main
+
+func Calc() int {
+	return 1
+}
+`)
+	newSrc := []byte(`package main
+
+func Calc() int {
+	return 2
+}
+`)
+
+	ast1, _ := ParseSource("main.go", oldSrc)
+	ast2, _ := ParseSource("main.go", newSrc)
+
+	wsDiff := DiffWorkspace(map[string]*FileAST{"main.go": ast1}, map[string]*FileAST{"main.go": ast2})
+	patch := FormatWorkspacePatch(wsDiff)
+
+	if !strings.Contains(patch, "--- main.go (modified)") {
+		t.Errorf("expected header in patch, got: %s", patch)
+	}
+	if !strings.Contains(patch, "- \treturn 1") && !strings.Contains(patch, "- return 1") {
+		t.Errorf("expected removed line in patch, got: %s", patch)
+	}
+	if !strings.Contains(patch, "+ \treturn 2") && !strings.Contains(patch, "+ return 2") {
+		t.Errorf("expected added line in patch, got: %s", patch)
 	}
 }
 

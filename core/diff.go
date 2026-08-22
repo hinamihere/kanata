@@ -407,3 +407,70 @@ func FormatWorkspaceDiff(diff *WorkspaceDiff) string {
 
 	return sb.String()
 }
+
+// FormatWorkspacePatch generates a detailed AST patch diff with node body transformations.
+func FormatWorkspacePatch(diff *WorkspaceDiff) string {
+	if diff == nil || len(diff.Files) == 0 {
+		return "working tree clean (no AST changes detected)\n"
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("semantic diff: +%d added, ~%d modified, -%d removed\n\n",
+		diff.AddedNodesCount, diff.ModifiedNodesCount, diff.RemovedNodesCount))
+
+	var sortedFiles []string
+	for p := range diff.Files {
+		sortedFiles = append(sortedFiles, p)
+	}
+	sort.Strings(sortedFiles)
+
+	for _, p := range sortedFiles {
+		fd := diff.Files[p]
+		var statusLabel string
+		switch fd.ChangeType {
+		case ChangeAdded:
+			statusLabel = "new file"
+		case ChangeRemoved:
+			statusLabel = "deleted"
+		case ChangeModified:
+			statusLabel = "modified"
+		}
+
+		sb.WriteString(fmt.Sprintf("--- %s (%s)\n", p, statusLabel))
+		for _, nd := range fd.NodeDiffs {
+			switch nd.ChangeType {
+			case ChangeAdded:
+				sb.WriteString(fmt.Sprintf("  + %s\n", nd.Signature))
+				if nd.NewNode != nil && nd.NewNode.Content != "" {
+					lines := strings.Split(nd.NewNode.Content, "\n")
+					for _, l := range lines {
+						sb.WriteString(fmt.Sprintf("    + %s\n", l))
+					}
+				}
+			case ChangeRemoved:
+				sb.WriteString(fmt.Sprintf("  - %s\n", nd.Signature))
+				if nd.OldNode != nil && nd.OldNode.Content != "" {
+					lines := strings.Split(nd.OldNode.Content, "\n")
+					for _, l := range lines {
+						sb.WriteString(fmt.Sprintf("    - %s\n", l))
+					}
+				}
+			case ChangeModified:
+				sb.WriteString(fmt.Sprintf("  ~ %s\n", nd.Signature))
+				if nd.OldNode != nil && nd.NewNode != nil {
+					oldLines := strings.Split(nd.OldNode.Content, "\n")
+					newLines := strings.Split(nd.NewNode.Content, "\n")
+					for _, l := range oldLines {
+						sb.WriteString(fmt.Sprintf("    - %s\n", l))
+					}
+					for _, l := range newLines {
+						sb.WriteString(fmt.Sprintf("    + %s\n", l))
+					}
+				}
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	return sb.String()
+}

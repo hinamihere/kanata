@@ -141,4 +141,15 @@ func Stop() bool {
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("kana log --stream all failed: %v", err)
 	}
+
+	// 10. Test diff
+	rootCmd.SetArgs([]string{"diff"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana diff failed: %v", err)
+	}
+
+	rootCmd.SetArgs([]string{"diff", "-p"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana diff -p failed: %v", err)
+	}
 }

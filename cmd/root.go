@@ -39,4 +39,5 @@ func init() {
 	rootCmd.AddCommand(rewindCmd)
 	rootCmd.AddCommand(snapshotCmd)
 	rootCmd.AddCommand(logCmd)
+	rootCmd.AddCommand(diffCmd)
 }
