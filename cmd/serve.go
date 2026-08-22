@@ -39,8 +39,8 @@ Examples:
 		defer store.Close()
 
 		addr := fmt.Sprintf("%s:%d", serveHost, servePort)
-		fmt.Printf("\n  🚀 Kanata Web Dashboard running at: http://localhost:%d\n", servePort)
-		fmt.Println("  Press Ctrl+C to stop the server")
+		fmt.Printf("kanata web dashboard running at: http://localhost:%d\n", servePort)
+		fmt.Println("press ctrl+c to stop")
 
 		mux := http.NewServeMux()
 
