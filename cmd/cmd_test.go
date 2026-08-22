@@ -237,4 +237,16 @@ func TestCLI_ClonePushPull_Local(t *testing.T) {
 	if !strings.Contains(string(content), "Extra") {
 		t.Errorf("expected pulled changes with 'Extra', got: %s", string(content))
 	}
+
+	// 5. Test suggest and auto snapshot
+	_ = os.WriteFile(filepath.Join(clonedDest, "main.go"), []byte("package main\nfunc App() {}\nfunc Extra() {}\nfunc AutoInferred() {}\n"), 0644)
+	rootCmd.SetArgs([]string{"suggest"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana suggest failed: %v", err)
+	}
+
+	rootCmd.SetArgs([]string{"snapshot", "-a"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana snapshot -a failed: %v", err)
+	}
 }

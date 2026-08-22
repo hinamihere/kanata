@@ -15,19 +15,23 @@ import (
 
 var snapshotIntent string
 var snapshotAuthor string
+var snapshotAuto bool
 
 var snapshotCmd = &cobra.Command{
 	Use:   "snapshot [files...]",
 	Short: "Record current AST graph transformation",
 	Long: `Parses workspace files into AST nodes, persists structural transformations into the local database, and updates the stream head.
 
-Optionally specify one or more file paths to selectively snapshot only those files:
+Examples:
   kana snapshot -i "Add User model" models/user.go
+  kana snapshot -a                                   # Auto-infer intent from AST diff
   kana snapshot -i "Update auth handlers" handlers/auth.go middleware/jwt.go`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if snapshotIntent == "" {
-			return fmt.Errorf("an intent message is required (use --intent or -i)")
-		}
+		defer func() {
+			snapshotIntent = ""
+			snapshotAuthor = ""
+			snapshotAuto = false
+		}()
 
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -106,16 +110,22 @@ Optionally specify one or more file paths to selectively snapshot only those fil
 			return nil
 		}
 
+		intent := snapshotIntent
+		if intent == "" {
+			intent = core.InferIntent(diff)
+			fmt.Printf("inferred intent: %q\n", intent)
+		}
+
 		treeHash := storage.ComputeTreeHash(snapshotFiles)
 		now := time.Now().UTC()
-		snapHash := storage.ComputeSnapshotHash(parentHash, stream, author, snapshotIntent, now, treeHash)
+		snapHash := storage.ComputeSnapshotHash(parentHash, stream, author, intent, now, treeHash)
 
 		snap := &storage.Snapshot{
 			Hash:       snapHash,
 			ParentHash: parentHash,
 			WorkStream: stream,
 			Author:     author,
-			Intent:     snapshotIntent,
+			Intent:     intent,
 			Timestamp:  now,
 			TreeHash:   treeHash,
 		}
@@ -141,6 +151,6 @@ Optionally specify one or more file paths to selectively snapshot only those fil
 
 func init() {
 	snapshotCmd.Flags().StringVarP(&snapshotIntent, "intent", "i", "", "Semantic intent description of this structural change")
-	snapshotCmd.Flags().StringVarP(&snapshotAuthor, "author", "a", "", "Author or agent identifier")
-	_ = snapshotCmd.MarkFlagRequired("intent")
+	snapshotCmd.Flags().StringVar(&snapshotAuthor, "author", "", "Author or agent identifier")
+	snapshotCmd.Flags().BoolVarP(&snapshotAuto, "auto", "a", false, "Automatically infer intent from AST changes")
 }
