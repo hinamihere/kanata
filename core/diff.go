@@ -1,0 +1,409 @@
+package core
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
+// ChangeType defines the semantic nature of an AST modification.
+type ChangeType string
+
+const (
+	ChangeAdded     ChangeType = "added"
+	ChangeRemoved   ChangeType = "removed"
+	ChangeModified  ChangeType = "modified"
+	ChangeUnchanged ChangeType = "unchanged"
+	ChangeConflict  ChangeType = "conflict"
+)
+
+// NodeDiff captures a granular structural change on an AST node.
+type NodeDiff struct {
+	NodeID     string     `json:"node_id"`
+	NodeName   string     `json:"node_name"`
+	NodeType   NodeType   `json:"node_type"`
+	Signature  string     `json:"signature"`
+	ChangeType ChangeType `json:"change_type"`
+	OldHash    string     `json:"old_hash,omitempty"`
+	NewHash    string     `json:"new_hash,omitempty"`
+	OldNode    *ASTNode   `json:"old_node,omitempty"`
+	NewNode    *ASTNode   `json:"new_node,omitempty"`
+	Details    string     `json:"details,omitempty"`
+}
+
+// FileDiff aggregates semantic changes across all nodes within a single file.
+type FileDiff struct {
+	FilePath   string     `json:"file_path"`
+	ChangeType ChangeType `json:"change_type"`
+	NodeDiffs  []NodeDiff `json:"node_diffs"`
+	OldRawHash string     `json:"old_raw_hash,omitempty"`
+	NewRawHash string     `json:"new_raw_hash,omitempty"`
+}
+
+// WorkspaceDiff represents the complete semantic delta across the entire repository.
+type WorkspaceDiff struct {
+	Files              map[string]FileDiff `json:"files"`
+	AddedNodesCount    int                 `json:"added_nodes_count"`
+	RemovedNodesCount  int                 `json:"removed_nodes_count"`
+	ModifiedNodesCount int                 `json:"modified_nodes_count"`
+}
+
+// DiffFiles performs AST-level node comparison between an old and a new FileAST.
+func DiffFiles(oldAST, newAST *FileAST) FileDiff {
+	if oldAST == nil && newAST == nil {
+		return FileDiff{ChangeType: ChangeUnchanged}
+	}
+
+	if oldAST == nil {
+		diff := FileDiff{
+			FilePath:   newAST.FilePath,
+			ChangeType: ChangeAdded,
+			NewRawHash: newAST.RawHash,
+		}
+		for _, node := range newAST.SortedNodes() {
+			diff.NodeDiffs = append(diff.NodeDiffs, NodeDiff{
+				NodeID:     node.ID,
+				NodeName:   node.Name,
+				NodeType:   node.Type,
+				Signature:  node.Signature,
+				ChangeType: ChangeAdded,
+				NewHash:    node.Hash,
+				NewNode:    &node,
+				Details:    fmt.Sprintf("+ %s", node.Signature),
+			})
+		}
+		return diff
+	}
+
+	if newAST == nil {
+		diff := FileDiff{
+			FilePath:   oldAST.FilePath,
+			ChangeType: ChangeRemoved,
+			OldRawHash: oldAST.RawHash,
+		}
+		for _, node := range oldAST.SortedNodes() {
+			diff.NodeDiffs = append(diff.NodeDiffs, NodeDiff{
+				NodeID:     node.ID,
+				NodeName:   node.Name,
+				NodeType:   node.Type,
+				Signature:  node.Signature,
+				ChangeType: ChangeRemoved,
+				OldHash:    node.Hash,
+				OldNode:    &node,
+				Details:    fmt.Sprintf("- %s", node.Signature),
+			})
+		}
+		return diff
+	}
+
+	diff := FileDiff{
+		FilePath:   newAST.FilePath,
+		ChangeType: ChangeUnchanged,
+		OldRawHash: oldAST.RawHash,
+		NewRawHash: newAST.RawHash,
+	}
+
+	if oldAST.RawHash == newAST.RawHash {
+		return diff
+	}
+
+	visited := make(map[string]bool)
+
+	for id, newNode := range newAST.Nodes {
+		visited[id] = true
+		oldNode, exists := oldAST.Nodes[id]
+		if !exists {
+			diff.NodeDiffs = append(diff.NodeDiffs, NodeDiff{
+				NodeID:     id,
+				NodeName:   newNode.Name,
+				NodeType:   newNode.Type,
+				Signature:  newNode.Signature,
+				ChangeType: ChangeAdded,
+				NewHash:    newNode.Hash,
+				NewNode:    &newNode,
+				Details:    fmt.Sprintf("+ %s", newNode.Signature),
+			})
+		} else if oldNode.Hash != newNode.Hash {
+			diff.NodeDiffs = append(diff.NodeDiffs, NodeDiff{
+				NodeID:     id,
+				NodeName:   newNode.Name,
+				NodeType:   newNode.Type,
+				Signature:  newNode.Signature,
+				ChangeType: ChangeModified,
+				OldHash:    oldNode.Hash,
+				NewHash:    newNode.Hash,
+				OldNode:    &oldNode,
+				NewNode:    &newNode,
+				Details:    fmt.Sprintf("~ %s", newNode.Signature),
+			})
+		}
+	}
+
+	for id, oldNode := range oldAST.Nodes {
+		if !visited[id] {
+			diff.NodeDiffs = append(diff.NodeDiffs, NodeDiff{
+				NodeID:     id,
+				NodeName:   oldNode.Name,
+				NodeType:   oldNode.Type,
+				Signature:  oldNode.Signature,
+				ChangeType: ChangeRemoved,
+				OldHash:    oldNode.Hash,
+				OldNode:    &oldNode,
+				Details:    fmt.Sprintf("- %s", oldNode.Signature),
+			})
+		}
+	}
+
+	if len(diff.NodeDiffs) > 0 {
+		diff.ChangeType = ChangeModified
+		sort.Slice(diff.NodeDiffs, func(i, j int) bool {
+			return diff.NodeDiffs[i].NodeID < diff.NodeDiffs[j].NodeID
+		})
+	}
+
+	return diff
+}
+
+// DiffWorkspace compares an entire workspace between old and new FileAST mappings.
+func DiffWorkspace(oldState, newState map[string]*FileAST) *WorkspaceDiff {
+	diff := &WorkspaceDiff{
+		Files: make(map[string]FileDiff),
+	}
+
+	allPaths := make(map[string]bool)
+	for p := range oldState {
+		allPaths[p] = true
+	}
+	for p := range newState {
+		allPaths[p] = true
+	}
+
+	for p := range allPaths {
+		oldF := oldState[p]
+		newF := newState[p]
+		fd := DiffFiles(oldF, newF)
+		if fd.ChangeType != ChangeUnchanged {
+			diff.Files[p] = fd
+			for _, nd := range fd.NodeDiffs {
+				switch nd.ChangeType {
+				case ChangeAdded:
+					diff.AddedNodesCount++
+				case ChangeRemoved:
+					diff.RemovedNodesCount++
+				case ChangeModified:
+					diff.ModifiedNodesCount++
+				}
+			}
+		}
+	}
+
+	return diff
+}
+
+// MergeResult represents the semantic 3-way merge outcome.
+type MergeResult struct {
+	MergedState map[string]*FileAST
+	Conflicts   []NodeDiff
+	HasConflict bool
+}
+
+// IntegrateWorkspaces performs a 3-way semantic AST integration.
+func IntegrateWorkspaces(base, current, target map[string]*FileAST) *MergeResult {
+	result := &MergeResult{
+		MergedState: make(map[string]*FileAST),
+		Conflicts:   make([]NodeDiff, 0),
+	}
+
+	allPaths := make(map[string]bool)
+	for p := range base {
+		allPaths[p] = true
+	}
+	for p := range current {
+		allPaths[p] = true
+	}
+	for p := range target {
+		allPaths[p] = true
+	}
+
+	for p := range allPaths {
+		baseF := base[p]
+		currF := current[p]
+		targF := target[p]
+
+		mergedF, conflicts := mergeFileAST(p, baseF, currF, targF)
+		if len(conflicts) > 0 {
+			result.HasConflict = true
+			result.Conflicts = append(result.Conflicts, conflicts...)
+		}
+		if mergedF != nil && len(mergedF.Nodes) > 0 {
+			result.MergedState[p] = mergedF
+		}
+	}
+
+	return result
+}
+
+func mergeFileAST(path string, base, current, target *FileAST) (*FileAST, []NodeDiff) {
+	var conflicts []NodeDiff
+
+	lang := "generic"
+	if current != nil {
+		lang = current.Language
+	} else if target != nil {
+		lang = target.Language
+	} else if base != nil {
+		lang = base.Language
+	}
+
+	merged := &FileAST{
+		FilePath: path,
+		Language: lang,
+		Nodes:    make(map[string]ASTNode),
+	}
+
+	allNodeIDs := make(map[string]bool)
+	if base != nil {
+		for id := range base.Nodes {
+			allNodeIDs[id] = true
+		}
+	}
+	if current != nil {
+		for id := range current.Nodes {
+			allNodeIDs[id] = true
+		}
+	}
+	if target != nil {
+		for id := range target.Nodes {
+			allNodeIDs[id] = true
+		}
+	}
+
+	for id := range allNodeIDs {
+		var baseNode, currNode, targNode *ASTNode
+		if base != nil {
+			if n, ok := base.Nodes[id]; ok {
+				baseNode = &n
+			}
+		}
+		if current != nil {
+			if n, ok := current.Nodes[id]; ok {
+				currNode = &n
+			}
+		}
+		if target != nil {
+			if n, ok := target.Nodes[id]; ok {
+				targNode = &n
+			}
+		}
+
+		baseHash := ""
+		if baseNode != nil {
+			baseHash = baseNode.Hash
+		}
+		currHash := ""
+		if currNode != nil {
+			currHash = currNode.Hash
+		}
+		targHash := ""
+		if targNode != nil {
+			targHash = targNode.Hash
+		}
+
+		if currHash == targHash {
+			if currNode != nil {
+				merged.Nodes[id] = *currNode
+			}
+			continue
+		}
+
+		if currHash == baseHash && targHash != baseHash {
+			if targNode != nil {
+				merged.Nodes[id] = *targNode
+			}
+			continue
+		}
+
+		if targHash == baseHash && currHash != baseHash {
+			if currNode != nil {
+				merged.Nodes[id] = *currNode
+			}
+			continue
+		}
+
+		sig := id
+		var nType NodeType = NodeBlock
+		if currNode != nil {
+			sig = currNode.Signature
+			nType = currNode.Type
+		} else if targNode != nil {
+			sig = targNode.Signature
+			nType = targNode.Type
+		}
+
+		conflict := NodeDiff{
+			NodeID:     id,
+			Signature:  sig,
+			NodeType:   nType,
+			ChangeType: ChangeConflict,
+			OldNode:    currNode,
+			NewNode:    targNode,
+			Details:    fmt.Sprintf("conflict on %s (%s)", sig, path),
+		}
+		conflicts = append(conflicts, conflict)
+
+		if currNode != nil {
+			merged.Nodes[id] = *currNode
+		}
+	}
+
+	return merged, conflicts
+}
+
+// FormatWorkspaceDiff generates a clean, subtle summary of semantic workspace changes.
+func FormatWorkspaceDiff(diff *WorkspaceDiff) string {
+	if diff == nil || len(diff.Files) == 0 {
+		return "working tree clean (no AST changes detected)\n"
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("semantic changes: +%d added, ~%d modified, -%d removed\n\n",
+		diff.AddedNodesCount, diff.ModifiedNodesCount, diff.RemovedNodesCount))
+
+	var sortedFiles []string
+	for p := range diff.Files {
+		sortedFiles = append(sortedFiles, p)
+	}
+	sort.Strings(sortedFiles)
+
+	for _, p := range sortedFiles {
+		fd := diff.Files[p]
+		var statusLabel string
+		switch fd.ChangeType {
+		case ChangeAdded:
+			statusLabel = "new file"
+		case ChangeRemoved:
+			statusLabel = "deleted "
+		case ChangeModified:
+			statusLabel = "modified"
+		}
+
+		sb.WriteString(fmt.Sprintf("  %-8s  %s\n", statusLabel, p))
+		for _, nd := range fd.NodeDiffs {
+			var symbol string
+			switch nd.ChangeType {
+			case ChangeAdded:
+				symbol = "+"
+			case ChangeRemoved:
+				symbol = "-"
+			case ChangeModified:
+				symbol = "~"
+			default:
+				symbol = " "
+			}
+			sb.WriteString(fmt.Sprintf("    %s %s\n", symbol, nd.Signature))
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}

@@ -1,0 +1,26 @@
+# Binaries
+kana
+kana.exe
+kana-linux
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Kanata Local Metadata Database
+.kana/
+*.db
+*.db-journal
+*.db-wal
+
+# Test / Temporary outputs
+test_*/
+tmp/
+scratch/
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
