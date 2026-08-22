@@ -152,4 +152,15 @@ func Stop() bool {
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("kana diff -p failed: %v", err)
 	}
+
+	// 11. Test blame
+	rootCmd.SetArgs([]string{"blame", "engine.go"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana blame failed: %v", err)
+	}
+
+	rootCmd.SetArgs([]string{"blame", "engine.go", "-f", "Start"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana blame -f failed: %v", err)
+	}
 }

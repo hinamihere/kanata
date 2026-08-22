@@ -41,6 +41,29 @@ type ParkedState struct {
 	Data       string    `json:"data"`
 }
 
+// NodeBlameEntry tracks who last modified each AST node in a file.
+type NodeBlameEntry struct {
+	NodeID       string    `json:"node_id"`
+	Signature    string    `json:"signature"`
+	NodeType     string    `json:"node_type"`
+	SnapshotHash string    `json:"snapshot_hash"`
+	Author       string    `json:"author"`
+	Intent       string    `json:"intent"`
+	Timestamp    time.Time `json:"timestamp"`
+	NodeHash     string    `json:"node_hash"`
+}
+
+// NodeEvolutionEntry represents a point in a specific function's evolution timeline.
+type NodeEvolutionEntry struct {
+	SnapshotHash string    `json:"snapshot_hash"`
+	Author       string    `json:"author"`
+	Intent       string    `json:"intent"`
+	Timestamp    time.Time `json:"timestamp"`
+	NodeHash     string    `json:"node_hash"`
+	Signature    string    `json:"signature"`
+	Content      string    `json:"content"`
+}
+
 // Storage manages the embedded SQLite database for Kanata.
 type Storage struct {
 	db       *sql.DB
@@ -98,7 +121,6 @@ func InitRepo(repoPath string) (*Storage, error) {
 		return nil, fmt.Errorf("failed to run migrations: %w", err)
 	}
 
-	// Set default stream "main"
 	_ = s.SetConfig("current_stream", "main")
 	_ = s.CreateStream("main", "")
 
@@ -186,6 +208,12 @@ func (s *Storage) migrate() error {
 		note TEXT NOT NULL,
 		timestamp DATETIME NOT NULL,
 		data TEXT NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS remotes (
+		name TEXT PRIMARY KEY,
+		url TEXT NOT NULL,
+		created_at DATETIME NOT NULL
 	);
 	`
 	_, err := s.db.Exec(schema)
@@ -291,6 +319,7 @@ func (s *Storage) SaveSnapshot(snap *Snapshot, files map[string]*core.FileAST) e
 	_, err = tx.Exec(`
 		INSERT INTO snapshots (hash, parent_hash, work_stream, author, intent, timestamp, tree_hash)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(hash) DO NOTHING
 	`, snap.Hash, snap.ParentHash, snap.WorkStream, snap.Author, snap.Intent, snap.Timestamp, snap.TreeHash)
 	if err != nil {
 		return fmt.Errorf("failed to insert snapshot: %w", err)
@@ -301,6 +330,7 @@ func (s *Storage) SaveSnapshot(snap *Snapshot, files map[string]*core.FileAST) e
 			snapshot_hash, file_path, node_id, node_name, signature, node_type, language,
 			start_line, end_line, content, node_hash, doc_comment, raw_file_hash
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(snapshot_hash, file_path, node_id) DO NOTHING
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare node insert: %w", err)
@@ -330,12 +360,13 @@ func (s *Storage) SaveSnapshot(snap *Snapshot, files map[string]*core.FileAST) e
 		}
 	}
 
-	// Update stream head
-	_, err = tx.Exec(`
-		UPDATE streams SET head_snapshot_hash = ? WHERE name = ?
-	`, snap.Hash, snap.WorkStream)
-	if err != nil {
-		return fmt.Errorf("failed to update stream head: %w", err)
+	if snap.WorkStream != "" {
+		_, err = tx.Exec(`
+			UPDATE streams SET head_snapshot_hash = ? WHERE name = ?
+		`, snap.Hash, snap.WorkStream)
+		if err != nil {
+			return fmt.Errorf("failed to update stream head: %w", err)
+		}
 	}
 
 	return tx.Commit()
@@ -479,6 +510,239 @@ func (s *Storage) ListSnapshots(stream string, limit int) ([]*Snapshot, error) {
 
 	return list, nil
 }
+
+// GetAllSnapshots returns all snapshots in the repository graph.
+func (s *Storage) GetAllSnapshots() ([]*Snapshot, error) {
+	rows, err := s.db.Query(`
+		SELECT hash, parent_hash, work_stream, author, intent, timestamp, tree_hash
+		FROM snapshots ORDER BY timestamp DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []*Snapshot
+	for rows.Next() {
+		var snap Snapshot
+		var parent sql.NullString
+		err := rows.Scan(
+			&snap.Hash,
+			&parent,
+			&snap.WorkStream,
+			&snap.Author,
+			&snap.Intent,
+			&snap.Timestamp,
+			&snap.TreeHash,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if parent.Valid {
+			snap.ParentHash = parent.String
+		}
+		list = append(list, &snap)
+	}
+
+	return list, nil
+}
+
+// -----------------------------------------------------------------------------
+// Semantic Blame & Node History
+// -----------------------------------------------------------------------------
+
+// GetFileBlame computes who and which snapshot last modified each AST node in a file.
+func (s *Storage) GetFileBlame(filePath, stream string) ([]NodeBlameEntry, error) {
+	headHash, err := s.GetStreamHead(stream)
+	if err != nil {
+		return nil, err
+	}
+	if headHash == "" {
+		return nil, fmt.Errorf("stream '%s' has no snapshots", stream)
+	}
+
+	// Fetch current nodes in file from HEAD
+	headAST, err := s.GetSnapshotAST(headHash)
+	if err != nil {
+		return nil, err
+	}
+
+	fAST, ok := headAST[filePath]
+	if !ok || fAST == nil || len(fAST.Nodes) == 0 {
+		return nil, fmt.Errorf("file '%s' not tracked in stream '%s'", filePath, stream)
+	}
+
+	var results []NodeBlameEntry
+
+	for _, node := range fAST.SortedNodes() {
+		// Traverse backward in snapshots to find last modifying snapshot
+		entry, err := s.findLastModifyingSnapshot(filePath, node.ID, node.Hash)
+		if err == nil && entry != nil {
+			results = append(results, *entry)
+		} else {
+			// Fallback to head snapshot
+			snap, _ := s.GetSnapshot(headHash)
+			results = append(results, NodeBlameEntry{
+				NodeID:       node.ID,
+				Signature:    node.Signature,
+				NodeType:     string(node.Type),
+				SnapshotHash: headHash,
+				Author:       snap.Author,
+				Intent:       snap.Intent,
+				Timestamp:    snap.Timestamp,
+				NodeHash:     node.Hash,
+			})
+		}
+	}
+
+	return results, nil
+}
+
+func (s *Storage) findLastModifyingSnapshot(filePath, nodeID, currentHash string) (*NodeBlameEntry, error) {
+	rows, err := s.db.Query(`
+		SELECT s.hash, s.author, s.intent, s.timestamp, n.node_hash, n.signature, n.node_type
+		FROM snapshots s
+		JOIN snapshot_nodes n ON s.hash = n.snapshot_hash
+		WHERE n.file_path = ? AND n.node_id = ?
+		ORDER BY s.timestamp ASC
+	`, filePath, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var lastMatching *NodeBlameEntry
+
+	for rows.Next() {
+		var entry NodeBlameEntry
+		err := rows.Scan(
+			&entry.SnapshotHash,
+			&entry.Author,
+			&entry.Intent,
+			&entry.Timestamp,
+			&entry.NodeHash,
+			&entry.Signature,
+			&entry.NodeType,
+		)
+		if err != nil {
+			return nil, err
+		}
+		entry.NodeID = nodeID
+
+		if entry.NodeHash == currentHash {
+			// First snapshot in time that introduced this exact hash
+			lastMatching = &entry
+			break
+		}
+	}
+
+	if lastMatching != nil {
+		return lastMatching, nil
+	}
+	return nil, fmt.Errorf("node not found in history")
+}
+
+// GetNodeHistory traces all historical modifications of a single AST node across time.
+func (s *Storage) GetNodeHistory(filePath, nodeID string, limit int) ([]NodeEvolutionEntry, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	rows, err := s.db.Query(`
+		SELECT s.hash, s.author, s.intent, s.timestamp, n.node_hash, n.signature, n.content
+		FROM snapshots s
+		JOIN snapshot_nodes n ON s.hash = n.snapshot_hash
+		WHERE (n.file_path = ? OR ? = '') AND (n.node_id = ? OR n.node_id LIKE ? OR n.node_name = ?)
+		ORDER BY s.timestamp DESC
+	`, filePath, filePath, nodeID, "%"+nodeID+"%", nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var allEntries []NodeEvolutionEntry
+	seenHashes := make(map[string]bool)
+
+	for rows.Next() {
+		var e NodeEvolutionEntry
+		err := rows.Scan(
+			&e.SnapshotHash,
+			&e.Author,
+			&e.Intent,
+			&e.Timestamp,
+			&e.NodeHash,
+			&e.Signature,
+			&e.Content,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		// Only record when node body hash changed
+		if !seenHashes[e.NodeHash] {
+			seenHashes[e.NodeHash] = true
+			allEntries = append(allEntries, e)
+			if len(allEntries) >= limit {
+				break
+			}
+		}
+	}
+
+	return allEntries, nil
+}
+
+// -----------------------------------------------------------------------------
+// Remotes Configuration
+// -----------------------------------------------------------------------------
+
+// AddRemote registers a remote repository endpoint.
+func (s *Storage) AddRemote(name, url string) error {
+	_, err := s.db.Exec(`
+		INSERT INTO remotes (name, url, created_at)
+		VALUES (?, ?, ?)
+		ON CONFLICT(name) DO UPDATE SET url = excluded.url
+	`, name, url, time.Now().UTC())
+	return err
+}
+
+// GetRemote retrieves the URL for a remote name.
+func (s *Storage) GetRemote(name string) (string, error) {
+	var url string
+	err := s.db.QueryRow("SELECT url FROM remotes WHERE name = ?", name).Scan(&url)
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("remote '%s' not found", name)
+	}
+	return url, err
+}
+
+// ListRemotes returns all registered remotes.
+func (s *Storage) ListRemotes() (map[string]string, error) {
+	rows, err := s.db.Query("SELECT name, url FROM remotes ORDER BY name ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	remotes := make(map[string]string)
+	for rows.Next() {
+		var name, url string
+		if err := rows.Scan(&name, &url); err != nil {
+			return nil, err
+		}
+		remotes[name] = url
+	}
+	return remotes, nil
+}
+
+// RemoveRemote deletes a remote entry.
+func (s *Storage) RemoveRemote(name string) error {
+	_, err := s.db.Exec("DELETE FROM remotes WHERE name = ?", name)
+	return err
+}
+
+// -----------------------------------------------------------------------------
+// Parked States
+// -----------------------------------------------------------------------------
 
 // ParkWorkspace serializes current workspace AST and parks it out of band.
 func (s *Storage) ParkWorkspace(stream, note string, fileMap map[string]*core.FileAST) (string, error) {
