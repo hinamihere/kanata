@@ -362,6 +362,7 @@ func parseCSource(fileAST *FileAST, content []byte) {
 	inFuncOrStruct := false
 	braceDepth := 0
 	currentHeader := ""
+	nodeID := ""
 	currentType := NodeBlock
 
 	for i := 0; i < len(lines); i++ {
@@ -428,14 +429,16 @@ func parseCSource(fileAST *FileAST, content []byte) {
 				if typeName == "" {
 					typeName = "anonymous"
 				}
-				currentHeader = fmt.Sprintf("%s %s", typeMatch[2], typeName)
+				currentHeader = strings.TrimRight(trimmed, "{ ")
+				nodeID = fmt.Sprintf("type:%s", typeName)
 				currentType = NodeTypeDecl
 				startLine = i + 1
 				currentBlock = nil
 			} else if funcMatch := cFuncRegex.FindStringSubmatch(trimmed); funcMatch != nil && !strings.HasPrefix(trimmed, "return ") && !strings.HasPrefix(trimmed, "typedef ") {
 				inFuncOrStruct = true
 				funcName := funcMatch[1]
-				currentHeader = fmt.Sprintf("func %s", funcName)
+				currentHeader = strings.TrimRight(trimmed, "{ ")
+				nodeID = fmt.Sprintf("func:%s", funcName)
 				currentType = NodeFunction
 				startLine = i + 1
 				currentBlock = nil
@@ -449,7 +452,6 @@ func parseCSource(fileAST *FileAST, content []byte) {
 			if braceDepth <= 0 && (strings.Contains(line, "}") || strings.HasSuffix(trimmed, ";")) {
 				raw := strings.Join(currentBlock, "\n")
 				normalized := NormalizeCode(raw)
-				nodeID := fmt.Sprintf("%s:%s", strings.ToLower(string(currentType)), currentHeader)
 
 				fileAST.Nodes[nodeID] = ASTNode{
 					ID:        nodeID,
@@ -625,7 +627,11 @@ func parsePythonSource(fileAST *FileAST, content []byte) {
 func emitPythonNode(fileAST *FileAST, lines []string, name, sig string, nType NodeType, start, end int) {
 	raw := strings.Join(lines, "\n")
 	normalized := NormalizeCode(raw)
-	nodeID := fmt.Sprintf("%s:%s", strings.ToLower(string(nType)), name)
+	prefix := strings.ToLower(string(nType))
+	if nType == NodeFunction {
+		prefix = "func"
+	}
+	nodeID := fmt.Sprintf("%s:%s", prefix, name)
 
 	fileAST.Nodes[nodeID] = ASTNode{
 		ID:        nodeID,
@@ -752,7 +758,11 @@ func parseRustSource(fileAST *FileAST, content []byte) {
 			if (braceDepth <= 0 && strings.Contains(line, "}")) || (braceDepth == 0 && strings.HasSuffix(trimmed, ";")) {
 				raw := strings.Join(currentBlock, "\n")
 				normalized := NormalizeCode(raw)
-				nodeID := fmt.Sprintf("%s:%s", strings.ToLower(string(nodeType)), nodeName)
+				prefix := strings.ToLower(string(nodeType))
+				if nodeType == NodeFunction {
+					prefix = "func"
+				}
+				nodeID := fmt.Sprintf("%s:%s", prefix, nodeName)
 
 				fileAST.Nodes[nodeID] = ASTNode{
 					ID:        nodeID,

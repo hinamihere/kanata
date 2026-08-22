@@ -117,13 +117,13 @@ int start_server(ServerConfig *cfg) {
 	}
 
 	// Verify struct / type
-	if typeNode, ok := fAST.Nodes["type:struct ServerConfig"]; !ok || typeNode.Type != NodeTypeDecl {
-		t.Errorf("missing or invalid type:struct ServerConfig")
+	if typeNode, ok := fAST.Nodes["type:ServerConfig"]; !ok || typeNode.Type != NodeTypeDecl {
+		t.Errorf("missing or invalid type:ServerConfig")
 	}
 
 	// Verify function
-	if fnNode, ok := fAST.Nodes["function:func start_server"]; !ok || fnNode.Type != NodeFunction {
-		t.Errorf("missing or invalid function:func start_server")
+	if fnNode, ok := fAST.Nodes["func:start_server"]; !ok || fnNode.Type != NodeFunction {
+		t.Errorf("missing or invalid func:start_server")
 	}
 }
 
@@ -157,12 +157,12 @@ async def health_check():
 		t.Errorf("missing type:UserProfile")
 	}
 
-	if fn, ok := fAST.Nodes["function:compute_hash"]; !ok || fn.Type != NodeFunction {
-		t.Errorf("missing function:compute_hash")
+	if fn, ok := fAST.Nodes["func:compute_hash"]; !ok || fn.Type != NodeFunction {
+		t.Errorf("missing func:compute_hash")
 	}
 
-	if fn, ok := fAST.Nodes["function:health_check"]; !ok || fn.Type != NodeFunction {
-		t.Errorf("missing function:health_check")
+	if fn, ok := fAST.Nodes["func:health_check"]; !ok || fn.Type != NodeFunction {
+		t.Errorf("missing func:health_check")
 	}
 }
 
@@ -223,7 +223,7 @@ pub fn initialize_db() -> Database {
 		t.Errorf("missing macro:log_info")
 	}
 
-	if fnNode, ok := fAST.Nodes["function:initialize_db"]; !ok || fnNode.Type != NodeFunction {
-		t.Errorf("missing function:initialize_db")
+	if fnNode, ok := fAST.Nodes["func:initialize_db"]; !ok || fnNode.Type != NodeFunction {
+		t.Errorf("missing func:initialize_db")
 	}
 }
