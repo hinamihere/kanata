@@ -19,22 +19,28 @@ var ignoredDirs = map[string]bool{
 	"dist":         true,
 }
 
+var ignoredFiles = map[string]bool{
+	"kana":       true,
+	"kana-linux": true,
+	"kana.exe":   true,
+}
+
 var ignoredExtensions = map[string]bool{
-	".exe":   true,
-	".dll":   true,
-	".so":    true,
-	".dylib": true,
-	".db":    true,
+	".exe":        true,
+	".dll":        true,
+	".so":         true,
+	".dylib":      true,
+	".db":         true,
 	".db-journal": true,
-	".db-wal": true,
-	".tar":   true,
-	".gz":    true,
-	".zip":   true,
-	".png":   true,
-	".jpg":   true,
-	".jpeg":  true,
-	".gif":   true,
-	".ico":   true,
+	".db-wal":     true,
+	".tar":        true,
+	".gz":         true,
+	".zip":        true,
+	".png":        true,
+	".jpg":        true,
+	".jpeg":       true,
+	".gif":        true,
+	".ico":        true,
 }
 
 // ScanWorkspace traverses the repository workspace and produces an AST representation of all code files.
@@ -54,8 +60,21 @@ func ScanWorkspace(repoRoot string) (map[string]*FileAST, error) {
 			return nil
 		}
 
+		if ignoredFiles[name] {
+			return nil
+		}
+
 		ext := strings.ToLower(filepath.Ext(name))
 		if ignoredExtensions[ext] {
+			return nil
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		if isBinary(content) {
 			return nil
 		}
 
@@ -65,14 +84,12 @@ func ScanWorkspace(repoRoot string) (map[string]*FileAST, error) {
 		}
 		relPath = filepath.ToSlash(relPath)
 
-		// Parse the file
-		fAST, err := ParseFile(path)
+		fileAST, err := ParseSource(relPath, content)
 		if err != nil {
 			return fmt.Errorf("failed to parse %s: %w", relPath, err)
 		}
-		fAST.FilePath = relPath
-		fileMap[relPath] = fAST
 
+		fileMap[relPath] = fileAST
 		return nil
 	})
 
@@ -81,6 +98,19 @@ func ScanWorkspace(repoRoot string) (map[string]*FileAST, error) {
 	}
 
 	return fileMap, nil
+}
+
+func isBinary(content []byte) bool {
+	limit := len(content)
+	if limit > 512 {
+		limit = 512
+	}
+	for i := 0; i < limit; i++ {
+		if content[i] == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // MaterializeWorkspace writes reconstructed file ASTs to disk.
