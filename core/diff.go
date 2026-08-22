@@ -460,11 +460,16 @@ func FormatWorkspacePatch(diff *WorkspaceDiff) string {
 				if nd.OldNode != nil && nd.NewNode != nil {
 					oldLines := strings.Split(nd.OldNode.Content, "\n")
 					newLines := strings.Split(nd.NewNode.Content, "\n")
-					for _, l := range oldLines {
-						sb.WriteString(fmt.Sprintf("    - %s\n", l))
-					}
-					for _, l := range newLines {
-						sb.WriteString(fmt.Sprintf("    + %s\n", l))
+					lineChanges := DiffLines(oldLines, newLines)
+					for _, lc := range lineChanges {
+						switch lc.Type {
+						case ChangeAdded:
+							sb.WriteString(fmt.Sprintf("    + %s\n", lc.Text))
+						case ChangeRemoved:
+							sb.WriteString(fmt.Sprintf("    - %s\n", lc.Text))
+						case ChangeUnchanged:
+							sb.WriteString(fmt.Sprintf("      %s\n", lc.Text))
+						}
 					}
 				}
 			}
@@ -473,4 +478,55 @@ func FormatWorkspacePatch(diff *WorkspaceDiff) string {
 	}
 
 	return sb.String()
+}
+
+// LineChange represents a single line delta within a modified node.
+type LineChange struct {
+	Type ChangeType
+	Text string
+}
+
+// DiffLines computes the line-by-line diff between two sets of text lines using LCS.
+func DiffLines(oldLines, newLines []string) []LineChange {
+	n := len(oldLines)
+	m := len(newLines)
+
+	dp := make([][]int, n+1)
+	for i := range dp {
+		dp[i] = make([]int, m+1)
+	}
+
+	for i := 1; i <= n; i++ {
+		for j := 1; j <= m; j++ {
+			if oldLines[i-1] == newLines[j-1] {
+				dp[i][j] = dp[i-1][j-1] + 1
+			} else if dp[i-1][j] >= dp[i][j-1] {
+				dp[i][j] = dp[i-1][j]
+			} else {
+				dp[i][j] = dp[i][j-1]
+			}
+		}
+	}
+
+	var changes []LineChange
+	i, j := n, m
+	for i > 0 || j > 0 {
+		if i > 0 && j > 0 && oldLines[i-1] == newLines[j-1] {
+			changes = append(changes, LineChange{Type: ChangeUnchanged, Text: oldLines[i-1]})
+			i--
+			j--
+		} else if j > 0 && (i == 0 || dp[i][j-1] >= dp[i-1][j]) {
+			changes = append(changes, LineChange{Type: ChangeAdded, Text: newLines[j-1]})
+			j--
+		} else if i > 0 && (j == 0 || dp[i-1][j] >= dp[i][j-1]) {
+			changes = append(changes, LineChange{Type: ChangeRemoved, Text: oldLines[i-1]})
+			i--
+		}
+	}
+
+	for l, r := 0, len(changes)-1; l < r; l, r = l+1, r-1 {
+		changes[l], changes[r] = changes[r], changes[l]
+	}
+
+	return changes
 }
