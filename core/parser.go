@@ -110,8 +110,6 @@ func ParseFile(filePath string) (*FileAST, error) {
 	return ParseSource(filePath, content)
 }
 
-var globalTreeSitter = NewTreeSitterEngine()
-
 // ParseSource parses in-memory source content into a FileAST.
 func ParseSource(filePath string, content []byte) (*FileAST, error) {
 	lang := DetectLanguage(filePath)
@@ -124,12 +122,7 @@ func ParseSource(filePath string, content []byte) (*FileAST, error) {
 		RawHash:  rawHash,
 	}
 
-	// 1. Attempt Tree-sitter CGO engine first
-	if err := globalTreeSitter.ParseSourceTree(fileAST, content); err == nil && len(fileAST.Nodes) > 0 {
-		return fileAST, nil
-	}
-
-	// 2. High-precision semantic parser fallback
+	// High-precision native semantic parsers
 	switch lang {
 	case "go":
 		if err := parseGoSource(fileAST, content); err != nil {
