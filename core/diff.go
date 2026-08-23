@@ -103,8 +103,17 @@ func DiffFiles(oldAST, newAST *FileAST) FileDiff {
 		NewRawHash: newAST.RawHash,
 	}
 
-	if oldAST.RawHash == newAST.RawHash {
-		return diff
+	if oldAST.RawHash != "" && oldAST.RawHash == newAST.RawHash && len(oldAST.Nodes) == len(newAST.Nodes) {
+		identical := true
+		for id, oldNode := range oldAST.Nodes {
+			if newNode, ok := newAST.Nodes[id]; !ok || newNode.Hash != oldNode.Hash {
+				identical = false
+				break
+			}
+		}
+		if identical {
+			return diff
+		}
 	}
 
 	visited := make(map[string]bool)

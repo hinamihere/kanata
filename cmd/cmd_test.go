@@ -411,3 +411,62 @@ func TestCLI_HTTP_ClonePushPull(t *testing.T) {
 		t.Fatalf("expected server to have pushed snapshot, got: %+v", snap)
 	}
 }
+
+func TestCLI_InteractiveSnapshotStaging(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "kana-stage-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	origWd, _ := os.Getwd()
+	defer os.Chdir(origWd)
+
+	_ = os.Chdir(tempDir)
+	rootCmd.SetArgs([]string{"init"})
+	_ = rootCmd.Execute()
+
+	_ = os.WriteFile(filepath.Join(tempDir, "app.go"), []byte("package main\nfunc Base() {}\n"), 0644)
+	rootCmd.SetArgs([]string{"snapshot", "-i", "Initial app base"})
+	_ = rootCmd.Execute()
+
+	// Add 2 new functions in app.go
+	_ = os.WriteFile(filepath.Join(tempDir, "app.go"), []byte("package main\nfunc Base() {}\nfunc StagedHelper() {}\nfunc UnstagedHelper() {}\n"), 0644)
+
+	// Pipe "y" (stage first new node) and "n" (skip second new node)
+	snapshotPromptReader = strings.NewReader("y\nn\n")
+	defer func() { snapshotPromptReader = os.Stdin }()
+
+	rootCmd.SetArgs([]string{"snapshot", "-p", "-i", "Selectively stage StagedHelper only"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("interactive snapshot failed: %v", err)
+	}
+
+	store, err := storage.OpenRepo(tempDir)
+	if err != nil {
+		t.Fatalf("failed to open storage: %v", err)
+	}
+	defer store.Close()
+
+	headHash, _ := store.GetStreamHead("main")
+	headAST, _ := store.GetSnapshotAST(headHash)
+
+	// Verify head snapshot contains StagedHelper
+	appAST, ok := headAST["app.go"]
+	if !ok {
+		t.Fatalf("expected app.go in head snapshot AST")
+	}
+
+	if _, ok := appAST.Nodes["func:StagedHelper"]; !ok {
+		t.Errorf("expected func:StagedHelper to be staged in snapshot")
+	}
+	if _, ok := appAST.Nodes["func:UnstagedHelper"]; ok {
+		t.Errorf("expected func:UnstagedHelper NOT to be staged in snapshot")
+	}
+
+	// Verify workspace on disk still has both
+	content, _ := os.ReadFile(filepath.Join(tempDir, "app.go"))
+	if !strings.Contains(string(content), "UnstagedHelper") {
+		t.Errorf("expected workspace file to retain unstaged changes")
+	}
+}
