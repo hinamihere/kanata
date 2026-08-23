@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -238,6 +239,103 @@ func (s *Storage) SetConfig(key, value string) error {
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value
 	`, key, value)
 	return err
+}
+
+// ListAllConfig returns all key-value configuration pairs in the repository.
+func (s *Storage) ListAllConfig() (map[string]string, error) {
+	rows, err := s.db.Query("SELECT key, value FROM config ORDER BY key ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	res := make(map[string]string)
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err == nil {
+			res[k] = v
+		}
+	}
+	return res, nil
+}
+
+// GetGlobalConfigPath returns the path to ~/.kanaconfig.
+func GetGlobalConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".kanaconfig"), nil
+}
+
+// LoadGlobalConfig reads ~/.kanaconfig into a key-value map.
+func LoadGlobalConfig() (map[string]string, error) {
+	path, err := GetGlobalConfigPath()
+	if err != nil {
+		return make(map[string]string), nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return make(map[string]string), nil
+	}
+	cfg := make(map[string]string)
+	_ = json.Unmarshal(data, &cfg)
+	return cfg, nil
+}
+
+// SetGlobalConfig writes a key-value pair to ~/.kanaconfig.
+func SetGlobalConfig(key, value string) error {
+	path, err := GetGlobalConfigPath()
+	if err != nil {
+		return err
+	}
+	cfg, _ := LoadGlobalConfig()
+	if value == "" {
+		delete(cfg, key)
+	} else {
+		cfg[key] = value
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+// ResolveAuthorIdentity determines the author string from CLI override, env, local config, global config, or OS user.
+func (s *Storage) ResolveAuthorIdentity(overrideAuthor string) string {
+	if overrideAuthor != "" {
+		return overrideAuthor
+	}
+
+	if env := os.Getenv("KANA_AUTHOR"); env != "" {
+		return env
+	}
+
+	name, _ := s.GetConfig("user.name")
+	email, _ := s.GetConfig("user.email")
+
+	if name == "" || email == "" {
+		gCfg, _ := LoadGlobalConfig()
+		if name == "" {
+			name = gCfg["user.name"]
+		}
+		if email == "" {
+			email = gCfg["user.email"]
+		}
+	}
+
+	if name != "" && email != "" {
+		return fmt.Sprintf("%s <%s>", name, email)
+	}
+	if name != "" {
+		return name
+	}
+
+	if u, err := user.Current(); err == nil {
+		return u.Username
+	}
+	return "kanata-user"
 }
 
 // GetCurrentStream returns the active work stream name.

@@ -13,6 +13,7 @@ const (
 	ChangeAdded     ChangeType = "added"
 	ChangeRemoved   ChangeType = "removed"
 	ChangeModified  ChangeType = "modified"
+	ChangeRenamed   ChangeType = "renamed"
 	ChangeUnchanged ChangeType = "unchanged"
 	ChangeConflict  ChangeType = "conflict"
 )
@@ -33,11 +34,13 @@ type NodeDiff struct {
 
 // FileDiff aggregates semantic changes across all nodes within a single file.
 type FileDiff struct {
-	FilePath   string     `json:"file_path"`
-	ChangeType ChangeType `json:"change_type"`
-	NodeDiffs  []NodeDiff `json:"node_diffs"`
-	OldRawHash string     `json:"old_raw_hash,omitempty"`
-	NewRawHash string     `json:"new_raw_hash,omitempty"`
+	FilePath    string     `json:"file_path"`
+	OldFilePath string     `json:"old_file_path,omitempty"`
+	ChangeType  ChangeType `json:"change_type"`
+	Similarity  float64    `json:"similarity,omitempty"`
+	NodeDiffs   []NodeDiff `json:"node_diffs"`
+	OldRawHash  string     `json:"old_raw_hash,omitempty"`
+	NewRawHash  string     `json:"new_raw_hash,omitempty"`
 }
 
 // WorkspaceDiff represents the complete semantic delta across the entire repository.
@@ -193,20 +196,101 @@ func DiffWorkspace(oldState, newState map[string]*FileAST) *WorkspaceDiff {
 		fd := DiffFiles(oldF, newF)
 		if fd.ChangeType != ChangeUnchanged {
 			diff.Files[p] = fd
-			for _, nd := range fd.NodeDiffs {
-				switch nd.ChangeType {
-				case ChangeAdded:
-					diff.AddedNodesCount++
-				case ChangeRemoved:
-					diff.RemovedNodesCount++
-				case ChangeModified:
-					diff.ModifiedNodesCount++
-				}
+		}
+	}
+
+	// Semantic File Rename & Move Detection
+	var addedFiles []string
+	var removedFiles []string
+	for p, fd := range diff.Files {
+		if fd.ChangeType == ChangeAdded {
+			addedFiles = append(addedFiles, p)
+		} else if fd.ChangeType == ChangeRemoved {
+			removedFiles = append(removedFiles, p)
+		}
+	}
+
+	matchedOld := make(map[string]bool)
+	for _, newP := range addedFiles {
+		newF := newState[newP]
+		if newF == nil || len(newF.Nodes) == 0 {
+			continue
+		}
+
+		bestOld := ""
+		bestScore := 0.0
+
+		for _, oldP := range removedFiles {
+			if matchedOld[oldP] {
+				continue
+			}
+			oldF := oldState[oldP]
+			if oldF == nil || len(oldF.Nodes) == 0 {
+				continue
+			}
+
+			score := computeASTSimilarity(oldF, newF)
+			if score > bestScore && score >= 0.60 {
+				bestScore = score
+				bestOld = oldP
+			}
+		}
+
+		if bestOld != "" {
+			matchedOld[bestOld] = true
+			oldF := oldState[bestOld]
+
+			renameDiff := DiffFiles(oldF, newF)
+			renameDiff.ChangeType = ChangeRenamed
+			renameDiff.OldFilePath = bestOld
+			renameDiff.Similarity = bestScore
+
+			delete(diff.Files, bestOld)
+			diff.Files[newP] = renameDiff
+		}
+	}
+
+	// Recompute total node change counters
+	for _, fd := range diff.Files {
+		for _, nd := range fd.NodeDiffs {
+			switch nd.ChangeType {
+			case ChangeAdded:
+				diff.AddedNodesCount++
+			case ChangeRemoved:
+				diff.RemovedNodesCount++
+			case ChangeModified:
+				diff.ModifiedNodesCount++
 			}
 		}
 	}
 
 	return diff
+}
+
+func computeASTSimilarity(oldF, newF *FileAST) float64 {
+	if oldF.RawHash != "" && oldF.RawHash == newF.RawHash {
+		return 1.0
+	}
+
+	if len(oldF.Nodes) == 0 || len(newF.Nodes) == 0 {
+		return 0.0
+	}
+
+	matchingNodes := 0
+	for id, oldNode := range oldF.Nodes {
+		if newNode, ok := newF.Nodes[id]; ok {
+			if oldNode.Hash == newNode.Hash {
+				matchingNodes++
+			}
+		}
+	}
+
+	maxNodes := len(oldF.Nodes)
+	if len(newF.Nodes) > maxNodes {
+		maxNodes = len(newF.Nodes)
+	}
+
+	return float64(matchingNodes) / float64(maxNodes)
 }
 
 // MergeResult represents the semantic 3-way merge outcome.
@@ -388,15 +472,20 @@ func FormatWorkspaceDiff(diff *WorkspaceDiff) string {
 		fd := diff.Files[p]
 		var statusLabel string
 		switch fd.ChangeType {
+		case ChangeRenamed:
+			statusLabel = fmt.Sprintf("renamed (%.0f%% match)", fd.Similarity*100)
+			sb.WriteString(fmt.Sprintf("  %-8s  %s -> %s\n", statusLabel, fd.OldFilePath, p))
 		case ChangeAdded:
 			statusLabel = "new file"
+			sb.WriteString(fmt.Sprintf("  %-8s  %s\n", statusLabel, p))
 		case ChangeRemoved:
 			statusLabel = "deleted "
+			sb.WriteString(fmt.Sprintf("  %-8s  %s\n", statusLabel, p))
 		case ChangeModified:
 			statusLabel = "modified"
+			sb.WriteString(fmt.Sprintf("  %-8s  %s\n", statusLabel, p))
 		}
 
-		sb.WriteString(fmt.Sprintf("  %-8s  %s\n", statusLabel, p))
 		for _, nd := range fd.NodeDiffs {
 			var symbol string
 			switch nd.ChangeType {
@@ -437,6 +526,8 @@ func FormatWorkspacePatch(diff *WorkspaceDiff) string {
 		fd := diff.Files[p]
 		var statusLabel string
 		switch fd.ChangeType {
+		case ChangeRenamed:
+			statusLabel = fmt.Sprintf("renamed from %s (%.0f%% match)", fd.OldFilePath, fd.Similarity*100)
 		case ChangeAdded:
 			statusLabel = "new file"
 		case ChangeRemoved:

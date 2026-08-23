@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
@@ -60,14 +59,7 @@ Examples:
 
 		parentHash, _ := store.GetStreamHead(stream)
 
-		author := snapshotAuthor
-		if author == "" {
-			if u, err := user.Current(); err == nil {
-				author = u.Username
-			} else {
-				author = "kanata-user"
-			}
-		}
+		author := store.ResolveAuthorIdentity(snapshotAuthor)
 
 		parentAST, err := store.GetSnapshotAST(parentHash)
 		if err != nil {

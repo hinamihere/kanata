@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io/fs"
 	"os"
@@ -8,73 +9,18 @@ import (
 	"strings"
 )
 
-var ignoredDirs = map[string]bool{
-	".git":         true,
-	".kana":        true,
-	".idea":        true,
-	".vscode":      true,
-	"node_modules": true,
-	"vendor":       true,
-	"bin":          true,
-	"dist":         true,
-}
-
-var ignoredFiles = map[string]bool{
-	"kana":       true,
-	"kana-linux": true,
-	"kana.exe":   true,
-}
-
-var ignoredExtensions = map[string]bool{
-	".exe":        true,
-	".dll":        true,
-	".so":         true,
-	".dylib":      true,
-	".db":         true,
-	".db-journal": true,
-	".db-wal":     true,
-	".tar":        true,
-	".gz":         true,
-	".zip":        true,
-	".png":        true,
-	".jpg":        true,
-	".jpeg":       true,
-	".gif":        true,
-	".ico":        true,
-}
-
-// ScanWorkspace traverses the repository workspace and produces an AST representation of all code files.
+// ScanWorkspace traverses the repository workspace, filtering via .kanaignore and .gitignore,
+// producing semantic ASTs for code and raw blob nodes for binary assets.
 func ScanWorkspace(repoRoot string) (map[string]*FileAST, error) {
 	fileMap := make(map[string]*FileAST)
+	ignorer := LoadIgnoreRules(repoRoot)
 
 	err := filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		name := d.Name()
-		if d.IsDir() {
-			if ignoredDirs[name] || strings.HasPrefix(name, ".") && name != "." {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		if ignoredFiles[name] {
-			return nil
-		}
-
-		ext := strings.ToLower(filepath.Ext(name))
-		if ignoredExtensions[ext] {
-			return nil
-		}
-
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-
-		if isBinary(content) {
+		if path == repoRoot {
 			return nil
 		}
 
@@ -83,6 +29,23 @@ func ScanWorkspace(repoRoot string) (map[string]*FileAST, error) {
 			return err
 		}
 		relPath = filepath.ToSlash(relPath)
+
+		// Check .kanaignore / .gitignore rules
+		if ignorer.IsIgnored(relPath, d.IsDir()) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if d.IsDir() {
+			return nil
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
 
 		fileAST, err := ParseSource(relPath, content)
 		if err != nil {
@@ -100,20 +63,7 @@ func ScanWorkspace(repoRoot string) (map[string]*FileAST, error) {
 	return fileMap, nil
 }
 
-func isBinary(content []byte) bool {
-	limit := len(content)
-	if limit > 512 {
-		limit = 512
-	}
-	for i := 0; i < limit; i++ {
-		if content[i] == 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// MaterializeWorkspace writes reconstructed file ASTs to disk.
+// MaterializeWorkspace writes reconstructed file ASTs and binary blobs back to disk.
 func MaterializeWorkspace(repoRoot string, fileMap map[string]*FileAST) error {
 	for relPath, fAST := range fileMap {
 		fullPath := filepath.Join(repoRoot, filepath.FromSlash(relPath))
@@ -121,6 +71,20 @@ func MaterializeWorkspace(repoRoot string, fileMap map[string]*FileAST) error {
 			return err
 		}
 
+		// Check for binary asset blob
+		if fAST.Language == "binary" {
+			if rawNode, ok := fAST.Nodes["blob:raw"]; ok {
+				decoded, err := base64.StdEncoding.DecodeString(rawNode.Content)
+				if err == nil {
+					if err := os.WriteFile(fullPath, decoded, 0644); err != nil {
+						return err
+					}
+					continue
+				}
+			}
+		}
+
+		// Text/Code AST Reconstruction
 		var sb strings.Builder
 		for _, node := range fAST.SortedNodes() {
 			if node.DocComment != "" {

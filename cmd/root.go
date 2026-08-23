@@ -51,5 +51,6 @@ func init() {
 	rootCmd.AddCommand(pickCmd)
 	rootCmd.AddCommand(streamCmd)
 	rootCmd.AddCommand(findCmd)
+	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(internalCmd)
 }

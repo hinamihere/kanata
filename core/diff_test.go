@@ -210,3 +210,45 @@ func SharedB() string {
 		t.Errorf("expected conflict on func:SharedA, got %s", conflictMerge.Conflicts[0].NodeID)
 	}
 }
+
+func TestDiffWorkspace_RenameDetection(t *testing.T) {
+	src := []byte(`package server
+
+func Start() error {
+	return nil
+}
+
+func Stop() error {
+	return nil
+}
+`)
+
+	oldAST, _ := ParseSource("server.go", src)
+	newAST, _ := ParseSource("src/server.go", src)
+
+	oldWorkspace := map[string]*FileAST{"server.go": oldAST}
+	newWorkspace := map[string]*FileAST{"src/server.go": newAST}
+
+	diff := DiffWorkspace(oldWorkspace, newWorkspace)
+
+	if len(diff.Files) != 1 {
+		t.Fatalf("expected 1 consolidated renamed file diff, got %d", len(diff.Files))
+	}
+
+	fd, ok := diff.Files["src/server.go"]
+	if !ok {
+		t.Fatalf("expected diff entry for src/server.go")
+	}
+
+	if fd.ChangeType != ChangeRenamed {
+		t.Errorf("expected ChangeRenamed, got %s", fd.ChangeType)
+	}
+
+	if fd.OldFilePath != "server.go" {
+		t.Errorf("expected OldFilePath 'server.go', got %s", fd.OldFilePath)
+	}
+
+	if fd.Similarity != 1.0 {
+		t.Errorf("expected 100%% similarity, got %f", fd.Similarity)
+	}
+}

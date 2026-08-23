@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"go/ast"
@@ -30,6 +31,7 @@ const (
 	NodeTrait    NodeType = "TRAIT"
 	NodeImpl     NodeType = "IMPL"
 	NodeBlock    NodeType = "BLOCK"
+	NodeRawBlob  NodeType = "RAW_BLOB"
 )
 
 // ASTNode represents a discrete structural code element.
@@ -110,11 +112,48 @@ func ParseFile(filePath string) (*FileAST, error) {
 	return ParseSource(filePath, content)
 }
 
+// IsBinaryContent inspects byte slice for null bytes to detect non-text binaries.
+func IsBinaryContent(content []byte) bool {
+	limit := len(content)
+	if limit > 8000 {
+		limit = 8000
+	}
+	for i := 0; i < limit; i++ {
+		if content[i] == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // ParseSource parses in-memory source content into a FileAST.
 func ParseSource(filePath string, content []byte) (*FileAST, error) {
-	lang := DetectLanguage(filePath)
 	rawHash := ComputeHash(content)
 
+	// Binary asset and unrecognized payload fallback
+	if IsBinaryContent(content) {
+		fileAST := &FileAST{
+			FilePath: filePath,
+			Language: "binary",
+			Nodes:    make(map[string]ASTNode),
+			RawHash:  rawHash,
+		}
+		nodeID := "blob:raw"
+		fileAST.Nodes[nodeID] = ASTNode{
+			ID:        nodeID,
+			Name:      filepath.Base(filePath),
+			Signature: fmt.Sprintf("binary asset (%d bytes)", len(content)),
+			Type:      NodeRawBlob,
+			Language:  "binary",
+			StartLine: 1,
+			EndLine:   1,
+			Content:   base64.StdEncoding.EncodeToString(content),
+			Hash:      rawHash,
+		}
+		return fileAST, nil
+	}
+
+	lang := DetectLanguage(filePath)
 	fileAST := &FileAST{
 		FilePath: filePath,
 		Language: lang,

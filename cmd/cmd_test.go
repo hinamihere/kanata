@@ -470,3 +470,58 @@ func TestCLI_InteractiveSnapshotStaging(t *testing.T) {
 		t.Errorf("expected workspace file to retain unstaged changes")
 	}
 }
+
+func TestCLI_ConfigAndAuthorIdentity(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "kana-config-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	origWd, _ := os.Getwd()
+	defer os.Chdir(origWd)
+
+	_ = os.Chdir(tempDir)
+	rootCmd.SetArgs([]string{"init"})
+	_ = rootCmd.Execute()
+
+	// 1. Set local config
+	rootCmd.SetArgs([]string{"config", "user.name", "Hoshino Hinami"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana config set user.name failed: %v", err)
+	}
+
+	rootCmd.SetArgs([]string{"config", "user.email", "hinami@example.com"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana config set user.email failed: %v", err)
+	}
+
+	rootCmd.SetArgs([]string{"config", "--list"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana config --list failed: %v", err)
+	}
+
+	// 2. Make snapshot and verify author string
+	_ = os.WriteFile(filepath.Join(tempDir, "main.go"), []byte("package main\nfunc Hello() {}\n"), 0644)
+	rootCmd.SetArgs([]string{"snapshot", "-i", "Initial configured commit"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana snapshot failed: %v", err)
+	}
+
+	store, err := storage.OpenRepo(tempDir)
+	if err != nil {
+		t.Fatalf("failed to open storage: %v", err)
+	}
+	defer store.Close()
+
+	headHash, _ := store.GetStreamHead("main")
+	snap, _ := store.GetSnapshot(headHash)
+	if snap == nil {
+		t.Fatalf("snapshot is nil")
+	}
+
+	expectedAuthor := "Hoshino Hinami <hinami@example.com>"
+	if snap.Author != expectedAuthor {
+		t.Errorf("expected snapshot author %q, got %q", expectedAuthor, snap.Author)
+	}
+}
