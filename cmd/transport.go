@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,9 +15,11 @@ import (
 	"kana/storage"
 )
 
-// RemoteLocation represents a parsed remote target (local path or SSH).
+// RemoteLocation represents a parsed remote target (local path, SSH, or HTTP).
 type RemoteLocation struct {
 	IsSSH   bool
+	IsHTTP  bool
+	HTTPURL string // e.g. "http://10.18.0.97:3000" or "https://kanata.example.com"
 	Host    string // e.g. "user@10.18.0.97" or "host"
 	Port    string // e.g. "22" or custom
 	Path    string // e.g. "/home/user/project" or "C:\dev\project"
@@ -23,6 +28,14 @@ type RemoteLocation struct {
 // ParseRemoteLocation parses a remote string into a RemoteLocation.
 func ParseRemoteLocation(raw string) (*RemoteLocation, error) {
 	raw = strings.TrimSpace(raw)
+
+	// Case 0: http:// or https:// Web Endpoint
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		return &RemoteLocation{
+			IsHTTP:  true,
+			HTTPURL: strings.TrimRight(raw, "/"),
+		}, nil
+	}
 
 	// Case 1: ssh://user@host:port/path
 	if strings.HasPrefix(raw, "ssh://") {
@@ -80,15 +93,36 @@ func ParseRemoteLocation(raw string) (*RemoteLocation, error) {
 
 // ResolveRemoteEndpoint resolves a remote name (from store) or raw URL into a RemoteLocation.
 func ResolveRemoteEndpoint(store *storage.Storage, remoteOrURL string) (*RemoteLocation, error) {
-	url, err := store.GetRemote(remoteOrURL)
-	if err == nil && url != "" {
-		return ParseRemoteLocation(url)
+	u, err := store.GetRemote(remoteOrURL)
+	if err == nil && u != "" {
+		return ParseRemoteLocation(u)
 	}
 	return ParseRemoteLocation(remoteOrURL)
 }
 
 // GetRemoteStreamHead fetches the latest snapshot hash from a remote location.
 func GetRemoteStreamHead(loc *RemoteLocation, stream string) (string, error) {
+	if loc.IsHTTP {
+		reqURL := fmt.Sprintf("%s/api/transport/head?stream=%s", loc.HTTPURL, url.QueryEscape(stream))
+		resp, err := http.Get(reqURL)
+		if err != nil {
+			return "", fmt.Errorf("http connection failed to %s: %w", loc.HTTPURL, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return "", fmt.Errorf("remote http error (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+		var headResp struct {
+			Stream string `json:"stream"`
+			Head   string `json:"head"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&headResp); err != nil {
+			return "", fmt.Errorf("invalid json from remote: %w", err)
+		}
+		return headResp.Head, nil
+	}
+
 	if !loc.IsSSH {
 		remoteStore, err := storage.OpenRepo(loc.Path)
 		if err != nil {
@@ -122,6 +156,20 @@ func PushBundleToRemote(loc *RemoteLocation, bundle *storage.SyncBundle) error {
 		return fmt.Errorf("failed to encode bundle: %w", err)
 	}
 
+	if loc.IsHTTP {
+		reqURL := fmt.Sprintf("%s/api/transport/import-bundle", loc.HTTPURL)
+		resp, err := http.Post(reqURL, "application/json", bytes.NewReader(bundleBytes))
+		if err != nil {
+			return fmt.Errorf("http post failed to %s: %w", loc.HTTPURL, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("remote http error (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+		return nil
+	}
+
 	if !loc.IsSSH {
 		remoteStore, err := storage.OpenRepo(loc.Path)
 		if err != nil {
@@ -152,6 +200,25 @@ func PushBundleToRemote(loc *RemoteLocation, bundle *storage.SyncBundle) error {
 
 // FetchBundleFromRemote pulls a sync bundle from a remote location.
 func FetchBundleFromRemote(loc *RemoteLocation, stream, sinceHash string) (*storage.SyncBundle, error) {
+	if loc.IsHTTP {
+		reqURL := fmt.Sprintf("%s/api/transport/export-bundle?stream=%s&since=%s",
+			loc.HTTPURL, url.QueryEscape(stream), url.QueryEscape(sinceHash))
+		resp, err := http.Get(reqURL)
+		if err != nil {
+			return nil, fmt.Errorf("http get failed to %s: %w", loc.HTTPURL, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("remote http error (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+		var bundle storage.SyncBundle
+		if err := json.NewDecoder(resp.Body).Decode(&bundle); err != nil {
+			return nil, fmt.Errorf("invalid bundle json from remote: %w", err)
+		}
+		return &bundle, nil
+	}
+
 	if !loc.IsSSH {
 		remoteStore, err := storage.OpenRepo(loc.Path)
 		if err != nil {

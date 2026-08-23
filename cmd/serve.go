@@ -53,6 +53,11 @@ Examples:
 		mux.HandleFunc("/api/blame", handleBlame(store))
 		mux.HandleFunc("/api/node-history", handleNodeHistory(store))
 
+		// Transport API Routes for HTTP Clone / Push / Pull
+		mux.HandleFunc("/api/transport/head", handleTransportHead(store))
+		mux.HandleFunc("/api/transport/export-bundle", handleTransportExportBundle(store))
+		mux.HandleFunc("/api/transport/import-bundle", handleTransportImportBundle(store))
+
 		// Web Dashboard Single-Page UI
 		mux.HandleFunc("/", handleDashboardHTML(store))
 
@@ -237,5 +242,88 @@ func handleDashboardHTML(store *storage.Storage) http.HandlerFunc {
 		html := getDashboardHTML(repoName)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(html))
+	}
+}
+
+func handleTransportHead(store *storage.Storage) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		stream := r.URL.Query().Get("stream")
+		if stream == "" {
+			var err error
+			stream, err = store.GetCurrentStream()
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+		}
+
+		head, err := store.GetStreamHead(stream)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		resp := map[string]string{
+			"stream": stream,
+			"head":   head,
+		}
+		writeJSON(w, resp)
+	}
+}
+
+func handleTransportExportBundle(store *storage.Storage) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		stream := r.URL.Query().Get("stream")
+		if stream == "" {
+			var err error
+			stream, err = store.GetCurrentStream()
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+		}
+		since := r.URL.Query().Get("since")
+
+		bundle, err := store.ExportSyncBundle(stream, since)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeJSON(w, bundle)
+	}
+}
+
+func handleTransportImportBundle(store *storage.Storage) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST method required", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var bundle storage.SyncBundle
+		if err := json.NewDecoder(r.Body).Decode(&bundle); err != nil {
+			http.Error(w, "invalid bundle json: "+err.Error(), 400)
+			return
+		}
+
+		if err := store.ImportSyncBundle(&bundle); err != nil {
+			http.Error(w, "import bundle failed: "+err.Error(), 500)
+			return
+		}
+
+		// Materialize workspace files if this matches active stream
+		currStream, _ := store.GetCurrentStream()
+		if bundle.Stream == currStream && bundle.HeadHash != "" {
+			astMap, err := store.GetSnapshotAST(bundle.HeadHash)
+			if err == nil {
+				_ = core.MaterializeWorkspace(store.RepoPath, astMap)
+			}
+		}
+
+		writeJSON(w, map[string]interface{}{
+			"status":             "ok",
+			"snapshots_imported": len(bundle.Snapshots),
+			"nodes_imported":     len(bundle.Nodes),
+		})
 	}
 }

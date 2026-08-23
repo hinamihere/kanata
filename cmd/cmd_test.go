@@ -1,10 +1,14 @@
 package cmd
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"kana/storage"
 )
 
 func TestCLI_EndToEnd(t *testing.T) {
@@ -334,5 +338,76 @@ func TestCLI_ClonePushPull_Local(t *testing.T) {
 	rootCmd.SetArgs([]string{"find", "-t", "func", "Extra"})
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("kana find -t func failed: %v", err)
+	}
+}
+
+func TestCLI_HTTP_ClonePushPull(t *testing.T) {
+	primaryDir, err := os.MkdirTemp("", "kana-http-primary-*")
+	if err != nil {
+		t.Fatalf("failed to create primary temp dir: %v", err)
+	}
+	defer os.RemoveAll(primaryDir)
+
+	origWd, _ := os.Getwd()
+	defer os.Chdir(origWd)
+
+	// 1. Initialize primary repo
+	_ = os.Chdir(primaryDir)
+	rootCmd.SetArgs([]string{"init"})
+	_ = rootCmd.Execute()
+
+	_ = os.WriteFile(filepath.Join(primaryDir, "server.go"), []byte("package main\nfunc StartServer() {}\n"), 0644)
+	rootCmd.SetArgs([]string{"snapshot", "-i", "Initial server commit"})
+	_ = rootCmd.Execute()
+
+	store, err := storage.OpenRepo(primaryDir)
+	if err != nil {
+		t.Fatalf("failed to open primary storage: %v", err)
+	}
+	defer store.Close()
+
+	// 2. Start mock HTTP server exposing transport endpoints
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/transport/head", handleTransportHead(store))
+	mux.HandleFunc("/api/transport/export-bundle", handleTransportExportBundle(store))
+	mux.HandleFunc("/api/transport/import-bundle", handleTransportImportBundle(store))
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	// 3. Clone repository over HTTP
+	cloneDir, err := os.MkdirTemp("", "kana-http-cloned-*")
+	if err != nil {
+		t.Fatalf("failed to create clone temp dir: %v", err)
+	}
+	defer os.RemoveAll(cloneDir)
+
+	clonedDest := filepath.Join(cloneDir, "http_clone")
+	rootCmd.SetArgs([]string{"clone", server.URL, clonedDest})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana http clone failed: %v", err)
+	}
+
+	// Verify cloned file exists
+	if _, err := os.Stat(filepath.Join(clonedDest, "server.go")); err != nil {
+		t.Fatalf("cloned file server.go does not exist: %v", err)
+	}
+
+	// 4. Make new snapshot in clone and push over HTTP
+	_ = os.Chdir(clonedDest)
+	_ = os.WriteFile(filepath.Join(clonedDest, "server.go"), []byte("package main\nfunc StartServer() {}\nfunc StopServer() {}\n"), 0644)
+	rootCmd.SetArgs([]string{"snapshot", "-i", "Add StopServer over HTTP"})
+	_ = rootCmd.Execute()
+
+	rootCmd.SetArgs([]string{"push", "origin", "main"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana http push failed: %v", err)
+	}
+
+	// 5. Verify pushed state on server
+	newHead, _ := store.GetStreamHead("main")
+	snap, _ := store.GetSnapshot(newHead)
+	if snap == nil || snap.Intent != "Add StopServer over HTTP" {
+		t.Fatalf("expected server to have pushed snapshot, got: %+v", snap)
 	}
 }
