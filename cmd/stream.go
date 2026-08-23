@@ -130,7 +130,7 @@ Examples:
 		if len(addedNodes) > 0 {
 			fmt.Printf("+ added in '%s' (%d):\n", streamA, len(addedNodes))
 			for _, item := range addedNodes {
-				fmt.Printf("  • %s\n", item)
+				fmt.Printf("  + %s\n", item)
 			}
 			fmt.Println()
 		}
@@ -138,7 +138,7 @@ Examples:
 		if len(modifiedNodes) > 0 {
 			fmt.Printf("~ modified between streams (%d):\n", len(modifiedNodes))
 			for _, item := range modifiedNodes {
-				fmt.Printf("  • %s\n", item)
+				fmt.Printf("  ~ %s\n", item)
 			}
 			fmt.Println()
 		}
@@ -146,7 +146,7 @@ Examples:
 		if len(removedNodes) > 0 {
 			fmt.Printf("- only in '%s' (%d):\n", streamB, len(removedNodes))
 			for _, item := range removedNodes {
-				fmt.Printf("  • %s\n", item)
+				fmt.Printf("  - %s\n", item)
 			}
 			fmt.Println()
 		}
