@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"kana/core"
@@ -689,6 +690,99 @@ func (s *Storage) GetNodeHistory(filePath, nodeID string, limit int) ([]NodeEvol
 	}
 
 	return allEntries, nil
+}
+
+// SymbolSearchResult holds a discovered semantic symbol match.
+type SymbolSearchResult struct {
+	SnapshotHash string    `json:"snapshot_hash"`
+	FilePath     string    `json:"file_path"`
+	NodeID       string    `json:"node_id"`
+	NodeName     string    `json:"node_name"`
+	Signature    string    `json:"signature"`
+	NodeType     string    `json:"node_type"`
+	Language     string    `json:"language"`
+	StartLine    int       `json:"start_line"`
+	EndLine      int       `json:"end_line"`
+	Intent       string    `json:"intent"`
+	Author       string    `json:"author"`
+	Timestamp    time.Time `json:"timestamp"`
+	WorkStream   string    `json:"work_stream"`
+}
+
+// SearchSymbols queries AST nodes across snapshots by query string and optional filters.
+func (s *Storage) SearchSymbols(query, snapshotHash, nodeType, stream string, matchContent bool, limit int) ([]SymbolSearchResult, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	sqlQuery := `
+		SELECT n.snapshot_hash, n.file_path, n.node_id, n.node_name, n.signature, n.node_type, n.language, n.start_line, n.end_line, s.intent, s.author, s.timestamp, s.work_stream
+		FROM snapshot_nodes n
+		JOIN snapshots s ON n.snapshot_hash = s.hash
+		WHERE 1=1
+	`
+	var args []interface{}
+
+	if snapshotHash != "" {
+		sqlQuery += " AND n.snapshot_hash = ?"
+		args = append(args, snapshotHash)
+	}
+
+	if stream != "" {
+		sqlQuery += " AND s.work_stream = ?"
+		args = append(args, stream)
+	}
+
+	if nodeType != "" {
+		sqlQuery += " AND (LOWER(n.node_type) = LOWER(?) OR LOWER(n.node_id) LIKE ?)"
+		args = append(args, nodeType, strings.ToLower(nodeType)+":%")
+	}
+
+	if query != "" {
+		queryParam := "%" + strings.ToLower(query) + "%"
+		if matchContent {
+			sqlQuery += " AND (LOWER(n.node_name) LIKE ? OR LOWER(n.signature) LIKE ? OR LOWER(n.node_id) LIKE ? OR LOWER(n.content) LIKE ?)"
+			args = append(args, queryParam, queryParam, queryParam, queryParam)
+		} else {
+			sqlQuery += " AND (LOWER(n.node_name) LIKE ? OR LOWER(n.signature) LIKE ? OR LOWER(n.node_id) LIKE ?)"
+			args = append(args, queryParam, queryParam, queryParam)
+		}
+	}
+
+	sqlQuery += " ORDER BY s.timestamp DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.Query(sqlQuery, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []SymbolSearchResult
+	for rows.Next() {
+		var r SymbolSearchResult
+		err := rows.Scan(
+			&r.SnapshotHash,
+			&r.FilePath,
+			&r.NodeID,
+			&r.NodeName,
+			&r.Signature,
+			&r.NodeType,
+			&r.Language,
+			&r.StartLine,
+			&r.EndLine,
+			&r.Intent,
+			&r.Author,
+			&r.Timestamp,
+			&r.WorkStream,
+		)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, r)
+	}
+
+	return results, nil
 }
 
 // -----------------------------------------------------------------------------

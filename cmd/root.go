@@ -50,5 +50,6 @@ func init() {
 	rootCmd.AddCommand(graphCmd)
 	rootCmd.AddCommand(pickCmd)
 	rootCmd.AddCommand(streamCmd)
+	rootCmd.AddCommand(findCmd)
 	rootCmd.AddCommand(internalCmd)
 }

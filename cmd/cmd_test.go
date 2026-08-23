@@ -324,4 +324,15 @@ func TestCLI_ClonePushPull_Local(t *testing.T) {
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("kana park restore failed: %v", err)
 	}
+
+	// 9. Test find
+	rootCmd.SetArgs([]string{"find", "TransplantedHelper"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana find failed: %v", err)
+	}
+
+	rootCmd.SetArgs([]string{"find", "-t", "func", "Extra"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana find -t func failed: %v", err)
+	}
 }
