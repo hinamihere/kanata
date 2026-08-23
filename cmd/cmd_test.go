@@ -260,4 +260,35 @@ func TestCLI_ClonePushPull_Local(t *testing.T) {
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("kana snapshot -a failed: %v", err)
 	}
+
+	// 6. Test cherry-pick
+	rootCmd.SetArgs([]string{"focus", "feature-pick"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana focus failed: %v", err)
+	}
+
+	_ = os.WriteFile(filepath.Join(clonedDest, "main.go"), []byte("package main\nfunc App() {}\nfunc Extra() {}\nfunc AutoInferred() {}\nfunc TransplantedHelper() string { return \"picked\" }\n"), 0644)
+	rootCmd.SetArgs([]string{"snapshot", "-i", "Add TransplantedHelper on feature branch"})
+	_ = rootCmd.Execute()
+
+	rootCmd.SetArgs([]string{"focus", "main"})
+	_ = rootCmd.Execute()
+
+	// Verify main currently doesn't have TransplantedHelper
+	mContent, _ := os.ReadFile(filepath.Join(clonedDest, "main.go"))
+	if strings.Contains(string(mContent), "TransplantedHelper") {
+		t.Fatalf("expected main to not have TransplantedHelper yet")
+	}
+
+	// Pick only TransplantedHelper from feature-pick head
+	rootCmd.SetArgs([]string{"pick", "feature-pick", "-f", "TransplantedHelper"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana pick failed: %v", err)
+	}
+
+	// Verify main now has TransplantedHelper
+	mContentAfter, _ := os.ReadFile(filepath.Join(clonedDest, "main.go"))
+	if !strings.Contains(string(mContentAfter), "TransplantedHelper") {
+		t.Fatalf("expected main to contain TransplantedHelper after pick, got: %s", string(mContentAfter))
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"kana/core"
 	"kana/storage"
 
 	"github.com/spf13/cobra"
@@ -73,6 +74,14 @@ var focusCmd = &cobra.Command{
 
 		if err := store.SetCurrentStream(targetStream); err != nil {
 			return fmt.Errorf("failed to switch focus to %s: %w", targetStream, err)
+		}
+
+		targetHead, _ := store.GetStreamHead(targetStream)
+		if targetHead != "" {
+			targetAST, err := store.GetSnapshotAST(targetHead)
+			if err == nil {
+				_ = core.MaterializeWorkspace(store.RepoPath, targetAST)
+			}
 		}
 
 		fmt.Printf("focused on stream: %s\n", targetStream)

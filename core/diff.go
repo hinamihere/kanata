@@ -530,3 +530,73 @@ func DiffLines(oldLines, newLines []string) []LineChange {
 
 	return changes
 }
+
+// AppliedTransplant details a single transplant applied to the workspace.
+type AppliedTransplant struct {
+	FilePath   string
+	NodeID     string
+	Signature  string
+	ChangeType ChangeType
+}
+
+// ApplyNodeDelta applies selected node transformations from a WorkspaceDiff onto the target workspace AST.
+func ApplyNodeDelta(wsAST map[string]*FileAST, delta *WorkspaceDiff, targetFile, targetFunction string) ([]AppliedTransplant, error) {
+	var applied []AppliedTransplant
+	if delta == nil {
+		return applied, nil
+	}
+
+	targetFile = strings.TrimSpace(targetFile)
+	targetFunction = strings.TrimSpace(targetFunction)
+
+	for filePath, fDiff := range delta.Files {
+		if targetFile != "" && !strings.EqualFold(filePath, targetFile) && !strings.HasSuffix(filePath, targetFile) {
+			continue
+		}
+
+		fAST, exists := wsAST[filePath]
+		if !exists {
+			fAST = &FileAST{
+				FilePath: filePath,
+				Nodes:    make(map[string]ASTNode),
+			}
+			wsAST[filePath] = fAST
+		}
+
+		for _, nd := range fDiff.NodeDiffs {
+			if targetFunction != "" {
+				nameMatch := strings.EqualFold(nd.NodeName, targetFunction)
+				idMatch := strings.EqualFold(nd.NodeID, targetFunction) || strings.HasSuffix(nd.NodeID, ":"+targetFunction)
+				sigMatch := strings.Contains(strings.ToLower(nd.Signature), strings.ToLower(targetFunction))
+				if !nameMatch && !idMatch && !sigMatch {
+					continue
+				}
+			}
+
+			switch nd.ChangeType {
+			case ChangeAdded, ChangeModified:
+				if nd.NewNode != nil {
+					fAST.Nodes[nd.NodeID] = *nd.NewNode
+					applied = append(applied, AppliedTransplant{
+						FilePath:   filePath,
+						NodeID:     nd.NodeID,
+						Signature:  nd.Signature,
+						ChangeType: nd.ChangeType,
+					})
+				}
+			case ChangeRemoved:
+				if _, ok := fAST.Nodes[nd.NodeID]; ok {
+					delete(fAST.Nodes, nd.NodeID)
+					applied = append(applied, AppliedTransplant{
+						FilePath:   filePath,
+						NodeID:     nd.NodeID,
+						Signature:  nd.Signature,
+						ChangeType: nd.ChangeType,
+					})
+				}
+			}
+		}
+	}
+
+	return applied, nil
+}

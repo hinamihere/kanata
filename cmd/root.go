@@ -48,5 +48,6 @@ func init() {
 	rootCmd.AddCommand(suggestCmd)
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(graphCmd)
+	rootCmd.AddCommand(pickCmd)
 	rootCmd.AddCommand(internalCmd)
 }
