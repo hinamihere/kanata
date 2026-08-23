@@ -823,6 +823,46 @@ func (s *Storage) PopParked(id string) (*ParkedState, map[string]*core.FileAST, 
 	return &ps, files, nil
 }
 
+// GetParked retrieves a parked state without deleting it.
+func (s *Storage) GetParked(id string) (*ParkedState, map[string]*core.FileAST, error) {
+	var ps ParkedState
+	var err error
+	if id != "" {
+		err = s.db.QueryRow("SELECT id, work_stream, note, timestamp, data FROM parked_states WHERE id = ? OR note = ?", id, id).
+			Scan(&ps.ID, &ps.WorkStream, &ps.Note, &ps.Timestamp, &ps.Data)
+	} else {
+		err = s.db.QueryRow("SELECT id, work_stream, note, timestamp, data FROM parked_states ORDER BY timestamp DESC LIMIT 1").
+			Scan(&ps.ID, &ps.WorkStream, &ps.Note, &ps.Timestamp, &ps.Data)
+	}
+
+	if err == sql.ErrNoRows {
+		return nil, nil, fmt.Errorf("parked state '%s' not found", id)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var files map[string]*core.FileAST
+	if err := json.Unmarshal([]byte(ps.Data), &files); err != nil {
+		return nil, nil, fmt.Errorf("failed to deserialize parked state: %w", err)
+	}
+
+	return &ps, files, nil
+}
+
+// DropParked removes a parked state without restoring files.
+func (s *Storage) DropParked(id string) error {
+	res, err := s.db.Exec("DELETE FROM parked_states WHERE id = ? OR note = ?", id, id)
+	if err != nil {
+		return err
+	}
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("parked state '%s' not found", id)
+	}
+	return nil
+}
+
 // -----------------------------------------------------------------------------
 // Remote Synchronization & Bundle Transfer
 // -----------------------------------------------------------------------------

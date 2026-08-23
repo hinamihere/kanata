@@ -49,5 +49,6 @@ func init() {
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(graphCmd)
 	rootCmd.AddCommand(pickCmd)
+	rootCmd.AddCommand(streamCmd)
 	rootCmd.AddCommand(internalCmd)
 }

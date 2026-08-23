@@ -291,4 +291,37 @@ func TestCLI_ClonePushPull_Local(t *testing.T) {
 	if !strings.Contains(string(mContentAfter), "TransplantedHelper") {
 		t.Fatalf("expected main to contain TransplantedHelper after pick, got: %s", string(mContentAfter))
 	}
+
+	// 7. Test stream compare
+	rootCmd.SetArgs([]string{"stream", "compare", "feature-pick", "main"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana stream compare failed: %v", err)
+	}
+
+	rootCmd.SetArgs([]string{"stream", "list"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana stream list failed: %v", err)
+	}
+
+	// 8. Test named park shelf
+	_ = os.WriteFile(filepath.Join(clonedDest, "main.go"), []byte("package main\nfunc App() {}\nfunc Extra() {}\nfunc AutoInferred() {}\nfunc TransplantedHelper() string { return \"picked\" }\nfunc ParkedFunc() {}\n"), 0644)
+	rootCmd.SetArgs([]string{"park", "-n", "wip-shelf"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana park -n failed: %v", err)
+	}
+
+	rootCmd.SetArgs([]string{"park", "list"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana park list failed: %v", err)
+	}
+
+	rootCmd.SetArgs([]string{"park", "show", "wip-shelf"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana park show failed: %v", err)
+	}
+
+	rootCmd.SetArgs([]string{"park", "restore", "wip-shelf"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("kana park restore failed: %v", err)
+	}
 }
