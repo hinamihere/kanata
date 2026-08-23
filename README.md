@@ -134,6 +134,8 @@ Kanata is an open-source project, and I welcome contributions from everyone! Whe
 
 Please read the [CONTRIBUTING.md](CONTRIBUTING.md) file for details on the process for submitting pull requests, testing requirements, and guidelines on AI-assisted code.
 
-Feel free to fork the repository, make your changes, and open a Pull Request. Don't hesitate to jump in—all contributions, big and small, are appreciated!## License
+Feel free to fork the repository, make your changes, and open a Pull Request. Don't hesitate to jump in—all contributions, big and small, are appreciated!
+
+## License
 
 Kanata is available as Open Source Software, under the MIT license. See `LICENSE` for details.

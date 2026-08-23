@@ -36,6 +36,8 @@ jobs:
     name: Cross-Compile Binaries
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
